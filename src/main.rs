@@ -10,9 +10,10 @@ fn main() {
         signature::Ed25519KeyPair::generate_pkcs8(&rng).expect("Failed to generate key pair");
     let key_pair = signature::Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref())
         .expect("Failed to parse key pair");
-
+    println!("PKCS8 bytes: {:02X?}", pkcs8_bytes.as_ref());
     // Get the public key for later verification
     let public_key_bytes = key_pair.public_key().as_ref();
+    println!("Public key: {:02X?}", public_key_bytes);
 
     // Data to be signed
     let msg = b"hello world";
