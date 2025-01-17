@@ -9,7 +9,7 @@ fn main() {
     });
 
     let node1 = thread::spawn(move || {
-        let mut node1 = Node::new(1, "127.0.0.1:8081", "127.0.0.1:8080");
+        let mut node1 = Node::new(1, "127.0.0.1:8081", "127.0.0.1:8083");
         thread::sleep(Duration::from_secs(1));
         node1.run();
     });

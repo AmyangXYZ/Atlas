@@ -4,7 +4,6 @@ pub const MAGIC_NUMBER: u32 = 0xA71A5;
 pub const PACKET_BUFFER_SIZE: usize = 1024;
 pub const MAX_RETRIES: u8 = 3;
 pub const ACK_TIMEOUT: u64 = 500; // milliseconds
-
 pub const ORCHESTRATOR_ID: u16 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -14,6 +13,7 @@ pub enum PacketType {
     KeyRequest,
     KeyResponse,
     Data,
+    Transaction,
     Ack,
 }
 

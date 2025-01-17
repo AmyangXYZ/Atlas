@@ -16,7 +16,7 @@ pub struct Node {
     is_orchestrator: bool,
     joined: bool,
     addr_table: HashMap<u16, String>,
-    local_key_pair: Ed25519KeyPair,
+    key_pair: Ed25519KeyPair,
     peer_keys: HashMap<u16, Vec<u8>>,
     pending_acks: HashMap<u32, (u8, Instant, Packet)>,
 }
@@ -34,7 +34,7 @@ impl Node {
             is_orchestrator: id == ORCHESTRATOR_ID,
             joined: id == ORCHESTRATOR_ID,
             addr_table: HashMap::new(),
-            local_key_pair: Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap(),
+            key_pair: Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap(),
             peer_keys: HashMap::new(),
             pending_acks: HashMap::new(),
         }
@@ -79,7 +79,7 @@ impl Node {
     }
 
     pub fn sign(&self, message: String) -> Signature {
-        self.local_key_pair.sign(message.as_bytes())
+        self.key_pair.sign(message.as_bytes())
     }
 
     pub fn verify(&self, message: &str, sig_bytes: &[u8], public_key: &[u8]) -> bool {
@@ -103,7 +103,7 @@ impl Node {
             self.id,
             0,
             PacketType::JoinRequest,
-            JoinRequestPayload::new(self.id, self.local_key_pair.public_key().as_ref().to_vec())
+            JoinRequestPayload::new(self.id, self.key_pair.public_key().as_ref().to_vec())
                 .as_bytes(),
         );
         self.send(&packet);
