@@ -1,16 +1,16 @@
 use std::{thread, time::Duration};
 
-use atlas::{node::Node, orchestrator::Orchestrator};
+use atlas::node::Node;
 
 fn main() {
     let orchestrator = thread::spawn(move || {
-        let mut orchestrator = Orchestrator::new("127.0.0.1:8080");
+        let mut orchestrator = Node::new(0, "127.0.0.1:8080", "");
         orchestrator.run();
     });
+
     let node1 = thread::spawn(move || {
-        let mut node1 = Node::new(1, "127.0.0.1:8081");
+        let mut node1 = Node::new(1, "127.0.0.1:8081", "127.0.0.1:8080");
         thread::sleep(Duration::from_secs(1));
-        node1.join("127.0.0.1:8080");
         node1.run();
     });
     // let node2 = thread::spawn(move || {

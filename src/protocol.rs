@@ -2,6 +2,10 @@ use ring::rand::{SecureRandom, SystemRandom};
 
 pub const MAGIC_NUMBER: u32 = 0xA71A5;
 pub const PACKET_BUFFER_SIZE: usize = 1024;
+pub const MAX_RETRIES: u8 = 3;
+pub const ACK_TIMEOUT: u64 = 500; // milliseconds
+
+pub const ORCHESTRATOR_ID: u16 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PacketType {
@@ -28,7 +32,8 @@ impl From<u8> for PacketType {
 }
 
 pub struct Packet {
-    pub id: u64,
+    pub magic_number: u32,
+    pub packet_id: u32,
     pub src: u16,
     pub dst: u16,
     pub packet_type: u8,
@@ -41,7 +46,8 @@ impl Packet {
         let mut random_bytes = [0u8; 8];
         SystemRandom::new().fill(&mut random_bytes).unwrap();
         Self {
-            id: u64::from_le_bytes(random_bytes),
+            magic_number: MAGIC_NUMBER,
+            packet_id: u32::from_le_bytes(random_bytes[0..4].try_into().unwrap()),
             src,
             dst,
             packet_type: packet_type as u8,
@@ -51,21 +57,22 @@ impl Packet {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 25 {
+        if bytes.len() < 21 {
             return None;
         }
         let magic_number = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
         if magic_number != MAGIC_NUMBER {
             return None;
         }
-        let id = u64::from_le_bytes(bytes[4..12].try_into().unwrap());
-        let src = u16::from_le_bytes(bytes[12..14].try_into().unwrap());
+        let packet_id = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+        let src = u16::from_le_bytes(bytes[8..10].try_into().unwrap());
         let dst = u16::from_le_bytes(bytes[10..12].try_into().unwrap());
-        let timestamp = u64::from_le_bytes(bytes[14..22].try_into().unwrap());
-        let packet_type = bytes[22];
-        let payload = bytes[23..].to_vec();
+        let packet_type = bytes[12];
+        let timestamp = u64::from_le_bytes(bytes[13..21].try_into().unwrap());
+        let payload = bytes[21..].to_vec();
         Some(Self {
-            id,
+            magic_number: MAGIC_NUMBER,
+            packet_id,
             src,
             dst,
             packet_type,
@@ -75,14 +82,45 @@ impl Packet {
     }
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&MAGIC_NUMBER.to_le_bytes());
-        bytes.extend_from_slice(&self.id.to_le_bytes());
+        bytes.extend_from_slice(&self.magic_number.to_le_bytes());
+        bytes.extend_from_slice(&self.packet_id.to_le_bytes());
         bytes.extend_from_slice(&self.src.to_le_bytes());
         bytes.extend_from_slice(&self.dst.to_le_bytes());
         bytes.extend_from_slice(&self.packet_type.to_le_bytes());
         bytes.extend_from_slice(&self.timestamp.to_le_bytes());
         bytes.extend_from_slice(&self.payload);
         bytes
+    }
+
+    pub fn clone(&self) -> Self {
+        Self {
+            magic_number: self.magic_number,
+            packet_id: self.packet_id,
+            src: self.src,
+            dst: self.dst,
+            packet_type: self.packet_type,
+            timestamp: self.timestamp,
+            payload: self.payload.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AckPayload {
+    pub packet_id: u32,
+}
+
+impl AckPayload {
+    pub fn new(packet_id: u32) -> Self {
+        Self { packet_id }
+    }
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            packet_id: u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
+        }
+    }
+    pub fn as_bytes(&self) -> Vec<u8> {
+        self.packet_id.to_le_bytes().to_vec()
     }
 }
 

@@ -1,4 +1,7 @@
-use std::net::{SocketAddr, UdpSocket};
+use std::{
+    net::{SocketAddr, UdpSocket},
+    time::Duration,
+};
 
 pub trait Port {
     fn send(&self, dst: &str, data: &[u8]) -> Option<usize>;
@@ -8,8 +11,10 @@ pub trait Port {
 pub struct UdpPort(UdpSocket);
 
 impl UdpPort {
-    pub fn bind(addr: &str) -> Option<Self> {
-        UdpSocket::bind(addr).ok().map(Self)
+    pub fn bind(addr: &str, timeout: Duration) -> Option<Self> {
+        let socket = UdpSocket::bind(addr).ok()?;
+        socket.set_read_timeout(Some(timeout)).ok()?;
+        Some(Self(socket))
     }
 }
 
