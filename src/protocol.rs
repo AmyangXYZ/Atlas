@@ -1,29 +1,27 @@
 use ring::rand::{SecureRandom, SystemRandom};
 
-pub const MAGIC_NUMBER: u32 = 0xA71A5;
+pub const MAGIC_NUMBER: u32 = 0xA71A5001;
 pub const PACKET_BUFFER_SIZE: usize = 1024;
 pub const MAX_RETRIES: u8 = 3;
 pub const ACK_TIMEOUT: u64 = 500; // milliseconds
-pub const ORCHESTRATOR_ID: u16 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PacketType {
-    JoinRequest,
-    JoinResponse,
-    KeyRequest,
-    KeyResponse,
-    Data,
+    Probe,
+    Sync,
     Transaction,
+    Block,
+    Data,
     Ack,
 }
 
 impl From<u8> for PacketType {
     fn from(value: u8) -> Self {
         match value {
-            0 => PacketType::JoinRequest,
-            1 => PacketType::JoinResponse,
-            2 => PacketType::KeyRequest,
-            3 => PacketType::KeyResponse,
+            0 => PacketType::Probe,
+            1 => PacketType::Sync,
+            2 => PacketType::Transaction,
+            3 => PacketType::Block,
             4 => PacketType::Data,
             5 => PacketType::Ack,
             _ => panic!("Invalid packet type"),
@@ -125,72 +123,75 @@ impl AckPayload {
 }
 
 #[derive(Debug, Clone)]
-pub struct JoinRequestPayload {
+pub struct ProbePayload {
     pub node_id: u16,
-    pub key: Vec<u8>,
+    pub public_key: Vec<u8>,
 }
 
-impl JoinRequestPayload {
-    pub fn new(node_id: u16, key: Vec<u8>) -> Self {
-        Self { node_id, key }
+impl ProbePayload {
+    pub fn new(node_id: u16, public_key: Vec<u8>) -> Self {
+        Self {
+            node_id,
+            public_key,
+        }
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
             node_id: u16::from_le_bytes(bytes[0..2].try_into().unwrap()),
-            key: bytes[2..].to_vec(),
+            public_key: bytes[2..].to_vec(),
         }
     }
 
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.node_id.to_le_bytes());
-        bytes.extend_from_slice(&self.key);
+        bytes.extend_from_slice(&self.public_key);
         bytes
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct JoinResponsePayload {
-    pub permission: bool,
+pub struct SyncPayload {
+    pub node_id: u16,
+    pub public_key: Vec<u8>,
+    pub chain_height: u32,
+    pub last_block_hash: [u8; 32],
+    pub last_block_timestamp: u64,
 }
 
-impl JoinResponsePayload {
-    pub fn new(permission: bool) -> Self {
-        Self { permission }
-    }
-    pub fn from_bytes(bytes: &[u8]) -> Self {
+impl SyncPayload {
+    pub fn new(
+        node_id: u16,
+        public_key: Vec<u8>,
+        chain_height: u32,
+        last_block_hash: [u8; 32],
+        last_block_timestamp: u64,
+    ) -> Self {
         Self {
-            permission: bytes[0] == 1,
+            node_id,
+            public_key,
+            chain_height,
+            last_block_hash,
+            last_block_timestamp,
         }
     }
-    pub fn as_bytes(&self) -> Vec<u8> {
-        vec![self.permission as u8]
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct KeyPayload {
-    pub node_id: u16,
-    pub key: Vec<u8>,
-}
-
-impl KeyPayload {
-    pub fn new(node_id: u16, key: Vec<u8>) -> Self {
-        Self { node_id, key }
-    }
-
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
             node_id: u16::from_le_bytes(bytes[0..2].try_into().unwrap()),
-            key: bytes[2..].to_vec(),
+            public_key: bytes[2..].to_vec(),
+            chain_height: u32::from_le_bytes(bytes[2..6].try_into().unwrap()),
+            last_block_hash: bytes[6..38].try_into().unwrap(),
+            last_block_timestamp: u64::from_le_bytes(bytes[38..46].try_into().unwrap()),
         }
     }
-
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.node_id.to_le_bytes());
-        bytes.extend_from_slice(&self.key);
+        bytes.extend_from_slice(&self.public_key);
+        bytes.extend_from_slice(&self.chain_height.to_le_bytes());
+        bytes.extend_from_slice(&self.last_block_hash);
+        bytes.extend_from_slice(&self.last_block_timestamp.to_le_bytes());
         bytes
     }
 }

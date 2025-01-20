@@ -4,12 +4,12 @@ use atlas::node::Node;
 
 fn main() {
     let orchestrator = thread::spawn(move || {
-        let mut orchestrator = Node::new(0, "127.0.0.1:8080", "");
+        let mut orchestrator = Node::new(0, "127.0.0.1:8080");
         orchestrator.run();
     });
 
     let node1 = thread::spawn(move || {
-        let mut node1 = Node::new(1, "127.0.0.1:8081", "127.0.0.1:8083");
+        let mut node1 = Node::new(1, "127.0.0.1:8081");
         thread::sleep(Duration::from_secs(1));
         node1.run();
     });
@@ -22,7 +22,7 @@ fn main() {
     //     node2.send("127.0.0.1:8080", sig.as_ref());
     // });
 
-    orchestrator.join().unwrap();
-    node1.join().unwrap();
+    orchestrator.join().expect("Orchestrator thread failed");
+    node1.join().expect("Node 1 thread failed");
     // node2.join().unwrap();
 }

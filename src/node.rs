@@ -1,6 +1,6 @@
 use crate::protocol::{
-    AckPayload, JoinRequestPayload, JoinResponsePayload, KeyPayload, Packet, PacketType,
-    ACK_TIMEOUT, MAX_RETRIES, ORCHESTRATOR_ID, PACKET_BUFFER_SIZE,
+    AckPayload, Packet, PacketType, ProbePayload, SyncPayload, ACK_TIMEOUT, MAX_RETRIES,
+    PACKET_BUFFER_SIZE,
 };
 use crate::{cache::InMemoryCache, port::Port, port::UdpPort};
 use ring::rand;
@@ -12,9 +12,7 @@ pub struct Node {
     pub id: u16,
     pub cache: InMemoryCache,
     port: UdpPort,
-    orchestrator_address: String,
-    is_orchestrator: bool,
-    joined: bool,
+    is_leader: bool,
     addr_table: HashMap<u16, String>,
     key_pair: Ed25519KeyPair,
     peer_keys: HashMap<u16, Vec<u8>>,
@@ -22,7 +20,7 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(id: u16, address: &str, orchestrator_address: &str) -> Self {
+    pub fn new(id: u16, address: &str) -> Self {
         let rng = rand::SystemRandom::new();
         let pkcs8_bytes = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
 
@@ -30,9 +28,7 @@ impl Node {
             id,
             cache: InMemoryCache::new(),
             port: UdpPort::bind(&address, Duration::from_millis(10)).unwrap(),
-            orchestrator_address: orchestrator_address.to_string(),
-            is_orchestrator: id == ORCHESTRATOR_ID,
-            joined: id == ORCHESTRATOR_ID,
+            is_leader: id == 0,
             addr_table: HashMap::new(),
             key_pair: Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap(),
             peer_keys: HashMap::new(),
@@ -41,10 +37,9 @@ impl Node {
     }
 
     pub fn run(&mut self) {
-        if !self.is_orchestrator {
-            self.send_join_request(&self.orchestrator_address.clone());
+        if !self.is_leader {
+            self.send_probe("127.0.0.1:8080");
         }
-
         let mut buffer = [0; PACKET_BUFFER_SIZE];
         loop {
             self.check_ack_timeouts();
@@ -69,10 +64,8 @@ impl Node {
             }
             match PacketType::from(packet.packet_type) {
                 PacketType::Ack => self.handle_ack(&packet),
-                PacketType::JoinRequest => self.handle_join_request(packet),
-                PacketType::JoinResponse => self.handle_join_response(&packet),
-                PacketType::KeyRequest => self.handle_key_request(packet),
-                PacketType::KeyResponse => self.handle_key_response(&packet),
+                PacketType::Probe => self.handle_probe(packet),
+                PacketType::Sync => self.handle_sync(&packet),
                 _ => continue,
             }
         }
@@ -97,14 +90,13 @@ impl Node {
         self.send(&ack_packet);
     }
 
-    fn send_join_request(&mut self, orchestrator_address: &str) {
+    fn send_probe(&mut self, orchestrator_address: &str) {
         self.addr_table.insert(0, orchestrator_address.to_string());
         let packet = Packet::new(
             self.id,
             0,
-            PacketType::JoinRequest,
-            JoinRequestPayload::new(self.id, self.key_pair.public_key().as_ref().to_vec())
-                .as_bytes(),
+            PacketType::Probe,
+            ProbePayload::new(self.id, self.key_pair.public_key().as_ref().to_vec()).as_bytes(),
         );
         self.send(&packet);
     }
@@ -114,42 +106,32 @@ impl Node {
         self.pending_acks.remove(&ack_payload.packet_id);
     }
 
-    fn handle_join_request(&mut self, packet: Packet) {
-        let join_request_payload = JoinRequestPayload::from_bytes(&packet.payload);
+    fn handle_probe(&mut self, packet: Packet) {
+        let probe_payload = ProbePayload::from_bytes(&packet.payload);
         self.peer_keys
-            .insert(join_request_payload.node_id, join_request_payload.key);
+            .insert(probe_payload.node_id, probe_payload.public_key.clone());
 
         let packet = Packet::new(
             self.id,
-            join_request_payload.node_id,
-            PacketType::JoinResponse,
-            JoinResponsePayload::new(true).as_bytes(),
+            probe_payload.node_id,
+            PacketType::Sync,
+            SyncPayload::new(
+                self.id,
+                self.key_pair.public_key().as_ref().to_vec(),
+                0,
+                [0; 32],
+                0,
+            )
+            .as_bytes(),
         );
 
         self.send(&packet);
     }
 
-    fn handle_join_response(&mut self, packet: &Packet) {
-        let join_response_payload = JoinResponsePayload::from_bytes(&packet.payload);
-        self.joined = join_response_payload.permission;
-    }
-
-    fn handle_key_request(&mut self, packet: Packet) {
-        let key_payload = KeyPayload::from_bytes(&packet.payload);
-        if let Some(key) = self.peer_keys.get(&key_payload.node_id) {
-            let packet = Packet::new(
-                self.id,
-                key_payload.node_id,
-                PacketType::KeyResponse,
-                key.to_vec(),
-            );
-            self.send(&packet);
-        }
-    }
-
-    fn handle_key_response(&mut self, packet: &Packet) {
-        let key_payload = KeyPayload::from_bytes(&packet.payload);
-        self.peer_keys.insert(key_payload.node_id, key_payload.key);
+    fn handle_sync(&mut self, packet: &Packet) {
+        let sync_payload = SyncPayload::from_bytes(&packet.payload);
+        self.peer_keys
+            .insert(sync_payload.node_id, sync_payload.public_key.clone());
     }
 
     fn send(&mut self, packet: &Packet) {
