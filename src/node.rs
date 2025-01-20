@@ -1,22 +1,27 @@
+use crate::block::Block;
 use crate::protocol::{
-    AckPayload, Packet, PacketType, ProbePayload, SyncPayload, ACK_TIMEOUT, MAX_RETRIES,
-    PACKET_BUFFER_SIZE,
+    AckPayload, BlockPayload, DataPayload, Packet, PacketType, ProbePayload, SyncPayload,
+    TransactionPayload, ACK_TIMEOUT, MAX_RETRIES, PACKET_BUFFER_SIZE,
 };
-use crate::{cache::InMemoryCache, port::Port, port::UdpPort};
+use crate::transaction::Transaction;
+use crate::{cache::Cache, cache::InMemoryCache, port::Port, port::UdpPort};
 use ring::rand;
 use ring::signature::{self, Ed25519KeyPair, KeyPair, Signature, UnparsedPublicKey};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 pub struct Node {
-    pub id: u16,
-    pub cache: InMemoryCache,
+    id: u16,
     port: UdpPort,
-    is_leader: bool,
     addr_table: HashMap<u16, String>,
-    key_pair: Ed25519KeyPair,
-    peer_keys: HashMap<u16, Vec<u8>>,
     pending_acks: HashMap<u32, (u8, Instant, Packet)>,
+
+    cache: InMemoryCache,
+    key_pair: Ed25519KeyPair,
+    peer_public_keys: HashMap<u16, Vec<u8>>,
+    leader: u16,
+    pending_transactions: Vec<Transaction>,
+    chain: Vec<Block>,
 }
 
 impl Node {
@@ -26,18 +31,21 @@ impl Node {
 
         Self {
             id,
-            cache: InMemoryCache::new(),
             port: UdpPort::bind(&address, Duration::from_millis(10)).unwrap(),
-            is_leader: id == 0,
             addr_table: HashMap::new(),
-            key_pair: Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap(),
-            peer_keys: HashMap::new(),
             pending_acks: HashMap::new(),
+
+            cache: InMemoryCache::new(),
+            leader: 0,
+            key_pair: Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap(),
+            peer_public_keys: HashMap::new(),
+            pending_transactions: Vec::new(),
+            chain: Vec::new(),
         }
     }
 
     pub fn run(&mut self) {
-        if !self.is_leader {
+        if self.id != self.leader {
             self.send_probe("127.0.0.1:8080");
         }
         let mut buffer = [0; PACKET_BUFFER_SIZE];
@@ -66,7 +74,9 @@ impl Node {
                 PacketType::Ack => self.handle_ack(&packet),
                 PacketType::Probe => self.handle_probe(packet),
                 PacketType::Sync => self.handle_sync(&packet),
-                _ => continue,
+                PacketType::Data => self.handle_data(&packet),
+                PacketType::Transaction => self.handle_transaction(&packet),
+                PacketType::Block => self.handle_block(&packet),
             }
         }
     }
@@ -108,30 +118,62 @@ impl Node {
 
     fn handle_probe(&mut self, packet: Packet) {
         let probe_payload = ProbePayload::from_bytes(&packet.payload);
-        self.peer_keys
+        self.peer_public_keys
             .insert(probe_payload.node_id, probe_payload.public_key.clone());
 
-        let packet = Packet::new(
-            self.id,
-            probe_payload.node_id,
-            PacketType::Sync,
-            SyncPayload::new(
+        if self.chain.len() > 0 {
+            let packet = Packet::new(
                 self.id,
-                self.key_pair.public_key().as_ref().to_vec(),
-                0,
-                [0; 32],
-                0,
-            )
-            .as_bytes(),
-        );
-
-        self.send(&packet);
+                probe_payload.node_id,
+                PacketType::Sync,
+                SyncPayload::new(
+                    self.id,
+                    self.key_pair.public_key().as_ref().to_vec(),
+                    self.chain.len() as u32,
+                    self.chain.last().unwrap().merkle_root,
+                    self.chain.last().unwrap().timestamp,
+                )
+                .as_bytes(),
+            );
+            self.send(&packet);
+        } else {
+            let packet = Packet::new(
+                self.id,
+                probe_payload.node_id,
+                PacketType::Sync,
+                SyncPayload::new(
+                    self.id,
+                    self.key_pair.public_key().as_ref().to_vec(),
+                    0,
+                    [0; 32],
+                    0,
+                )
+                .as_bytes(),
+            );
+            self.send(&packet);
+        }
     }
 
     fn handle_sync(&mut self, packet: &Packet) {
         let sync_payload = SyncPayload::from_bytes(&packet.payload);
-        self.peer_keys
+        self.peer_public_keys
             .insert(sync_payload.node_id, sync_payload.public_key.clone());
+    }
+
+    fn handle_data(&mut self, packet: &Packet) {
+        let data_payload = DataPayload::from_bytes(&packet.payload);
+        self.cache.set("data", data_payload.data.as_ref());
+    }
+
+    fn handle_transaction(&mut self, packet: &Packet) {
+        let transaction_payload = TransactionPayload::from_bytes(&packet.payload);
+        self.pending_transactions
+            .push(transaction_payload.transaction);
+    }
+
+    fn handle_block(&mut self, packet: &Packet) {
+        let block_payload = BlockPayload::from_bytes(&packet.payload);
+        self.chain.push(block_payload.block);
     }
 
     fn send(&mut self, packet: &Packet) {

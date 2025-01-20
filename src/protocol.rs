@@ -1,5 +1,7 @@
 use ring::rand::{SecureRandom, SystemRandom};
 
+use crate::{block::Block, transaction::Transaction};
+
 pub const MAGIC_NUMBER: u32 = 0xA71A5001;
 pub const PACKET_BUFFER_SIZE: usize = 1024;
 pub const MAX_RETRIES: u8 = 3;
@@ -216,6 +218,49 @@ impl DataPayload {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.signature);
         bytes.extend_from_slice(&self.data);
+        bytes
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TransactionPayload {
+    pub transaction: Transaction,
+}
+
+impl TransactionPayload {
+    pub fn new(transaction: Transaction) -> Self {
+        Self { transaction }
+    }
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            transaction: Transaction::from_bytes(bytes),
+        }
+    }
+    pub fn as_bytes(&self) -> Vec<u8> {
+        self.transaction.as_bytes()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BlockPayload {
+    pub block: Block,
+}
+
+impl BlockPayload {
+    pub fn new(block: Block) -> Self {
+        Self { block }
+    }
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            block: Block::new(vec![], bytes[32..64].try_into().unwrap()),
+        }
+    }
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.block.prev_block_hash);
+        for transaction in &self.block.transactions {
+            bytes.extend_from_slice(&transaction.as_bytes());
+        }
         bytes
     }
 }
