@@ -1,18 +1,20 @@
-use crate::block::Block;
+use crate::block::{Block, BLOCK_PERIOD};
+use crate::cache::CacheOperation;
 use crate::protocol::{
     AckPayload, BlockPayload, DataPayload, Packet, PacketType, ProbePayload, SyncPayload,
     TransactionPayload, ACK_TIMEOUT, MAX_RETRIES, PACKET_BUFFER_SIZE,
 };
 use crate::transaction::Transaction;
-use crate::{cache::Cache, cache::InMemoryCache, port::Port, port::UdpPort};
+use crate::{cache::Cache, cache::InMemoryCache};
 use ring::rand;
 use ring::signature::{self, Ed25519KeyPair, KeyPair, Signature, UnparsedPublicKey};
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::net::UdpSocket;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub struct Node {
     id: u16,
-    port: UdpPort,
+    socket: UdpSocket,
     addr_table: HashMap<u16, String>,
     pending_acks: HashMap<u32, (u8, Instant, Packet)>,
 
@@ -20,7 +22,7 @@ pub struct Node {
     key_pair: Ed25519KeyPair,
     peer_public_keys: HashMap<u16, Vec<u8>>,
     leader: u16,
-    pending_transactions: Vec<Transaction>,
+    pending_transactions: HashMap<[u8; 32], Transaction>,
     chain: Vec<Block>,
 }
 
@@ -28,10 +30,13 @@ impl Node {
     pub fn new(id: u16, address: &str) -> Self {
         let rng = rand::SystemRandom::new();
         let pkcs8_bytes = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
-
+        let socket = UdpSocket::bind(address).expect("Failed to bind to address");
+        socket
+            .set_read_timeout(Some(Duration::from_millis(10)))
+            .unwrap();
         Self {
             id,
-            port: UdpPort::bind(&address, Duration::from_millis(10)).unwrap(),
+            socket,
             addr_table: HashMap::new(),
             pending_acks: HashMap::new(),
 
@@ -39,7 +44,7 @@ impl Node {
             leader: 0,
             key_pair: Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap(),
             peer_public_keys: HashMap::new(),
-            pending_transactions: Vec::new(),
+            pending_transactions: HashMap::new(),
             chain: Vec::new(),
         }
     }
@@ -52,7 +57,20 @@ impl Node {
         loop {
             self.check_ack_timeouts();
 
-            let Some((size, addr)) = self.port.receive(&mut buffer) else {
+            if self.id == self.leader {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+
+                if self.chain.is_empty() {
+                    self.create_block();
+                } else if now - self.chain.last().unwrap().timestamp >= BLOCK_PERIOD {
+                    self.create_block();
+                }
+            }
+
+            let Ok((size, addr)) = self.socket.recv_from(&mut buffer) else {
                 continue;
             };
             let Some(packet) = Packet::from_bytes(&buffer[..size]) else {
@@ -81,13 +99,34 @@ impl Node {
         }
     }
 
-    pub fn sign(&self, message: String) -> Signature {
-        self.key_pair.sign(message.as_bytes())
+    fn sign(&self, message: Vec<u8>) -> Signature {
+        self.key_pair.sign(message.as_ref())
     }
 
-    pub fn verify(&self, message: &str, sig_bytes: &[u8], public_key: &[u8]) -> bool {
+    fn verify(&self, message: &[u8], sig_bytes: &[u8], public_key: &[u8]) -> bool {
         let verify_key = UnparsedPublicKey::new(&signature::ED25519, public_key);
-        verify_key.verify(message.as_bytes(), sig_bytes).is_ok()
+        verify_key.verify(message, sig_bytes).is_ok()
+    }
+
+    fn create_block(&mut self) {
+        let transactions = self.pending_transactions.values().cloned().collect();
+        self.pending_transactions.clear();
+        let block = Block::new(
+            transactions,
+            if self.chain.is_empty() {
+                [0; 32]
+            } else {
+                self.chain.last().unwrap().merkle_root
+            },
+        );
+
+        self.chain.push(block);
+        println!(
+            "[{:?}] Created block #{:?} {:?}",
+            self.id,
+            self.chain.len(),
+            self.chain.last().unwrap()
+        );
     }
 
     fn reply_ack(&mut self, packet: &Packet) {
@@ -102,7 +141,7 @@ impl Node {
 
     fn send_probe(&mut self, orchestrator_address: &str) {
         self.addr_table.insert(0, orchestrator_address.to_string());
-        let packet = Packet::new(
+        let probe_packet = Packet::new(
             self.id,
             0,
             PacketType::Probe,
@@ -112,7 +151,7 @@ impl Node {
             )
             .as_bytes(),
         );
-        self.send(&packet);
+        self.send(&probe_packet);
     }
 
     fn handle_ack(&mut self, packet: &Packet) {
@@ -125,8 +164,8 @@ impl Node {
         self.peer_public_keys
             .insert(probe_payload.node_id, probe_payload.public_key.to_vec());
 
-        if self.chain.len() > 0 {
-            let packet = Packet::new(
+        if !self.chain.is_empty() {
+            let sync_packet = Packet::new(
                 self.id,
                 probe_payload.node_id,
                 PacketType::Sync,
@@ -139,9 +178,9 @@ impl Node {
                 )
                 .as_bytes(),
             );
-            self.send(&packet);
+            self.send(&sync_packet);
         } else {
-            let packet = Packet::new(
+            let sync_packet = Packet::new(
                 self.id,
                 probe_payload.node_id,
                 PacketType::Sync,
@@ -154,7 +193,7 @@ impl Node {
                 )
                 .as_bytes(),
             );
-            self.send(&packet);
+            self.send(&sync_packet);
         }
     }
 
@@ -166,13 +205,61 @@ impl Node {
 
     fn handle_data(&mut self, packet: &Packet) {
         let data_payload = DataPayload::from_bytes(&packet.payload);
-        self.cache.set("data", data_payload.data.as_ref());
+        self.cache
+            .set(data_payload.name.as_str(), data_payload.data.as_ref());
+        println!(
+            "[{:?}] Cached data {:?} ({:?} bytes)",
+            self.id,
+            data_payload.name,
+            data_payload.data.len()
+        );
+
+        let txn = Transaction::new(self.id, packet.src, data_payload.name, CacheOperation::Set);
+        let sig = self.sign(txn.as_bytes());
+        self.pending_transactions.insert(txn.hash, txn.clone());
+
+        let peers: Vec<u16> = self.peer_public_keys.keys().copied().collect();
+        for peer in peers {
+            let txn_packet = Packet::new(
+                self.id,
+                peer,
+                PacketType::Transaction,
+                TransactionPayload::new(txn.clone(), sig.as_ref().try_into().unwrap()).as_bytes(),
+            );
+
+            self.send(&txn_packet);
+        }
     }
 
     fn handle_transaction(&mut self, packet: &Packet) {
         let transaction_payload = TransactionPayload::from_bytes(&packet.payload);
-        self.pending_transactions
-            .push(transaction_payload.transaction);
+        let Some(public_key) = self.peer_public_keys.get(&packet.src) else {
+            println!(
+                "[{:?}] No public key found for node {}",
+                self.id, packet.src
+            );
+            return;
+        };
+        let signature = transaction_payload.signature;
+        if self.verify(
+            transaction_payload.transaction.as_bytes().as_ref(),
+            signature.as_ref(),
+            public_key,
+        ) {
+            println!(
+                "[{:?}] Transaction verified: client {} {:?} data {:?} at node {} on {}",
+                self.id,
+                transaction_payload.transaction.client_id,
+                transaction_payload.transaction.operation,
+                transaction_payload.transaction.data_name,
+                transaction_payload.transaction.node_id,
+                transaction_payload.transaction.timestamp
+            );
+            self.pending_transactions.insert(
+                transaction_payload.transaction.hash,
+                transaction_payload.transaction,
+            );
+        }
     }
 
     fn handle_block(&mut self, packet: &Packet) {
@@ -189,7 +276,7 @@ impl Node {
             packet.dst
         );
         if let Some(dst_addr) = self.addr_table.get(&packet.dst) {
-            self.port.send(dst_addr, &packet.as_bytes());
+            self.socket.send_to(&packet.as_bytes(), dst_addr).unwrap();
             if PacketType::from(packet.packet_type) != PacketType::Ack {
                 self.pending_acks
                     .insert(packet.packet_id, (0, Instant::now(), packet.clone()));
@@ -219,7 +306,7 @@ impl Node {
                         packet_id,
                         retries + 2
                     );
-                    self.port.send(dst_addr, &packet.as_bytes());
+                    self.socket.send_to(&packet.as_bytes(), dst_addr).unwrap();
                     self.pending_acks
                         .insert(packet_id, (retries + 1, Instant::now(), packet));
                 }

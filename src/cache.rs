@@ -6,6 +6,24 @@ pub trait Cache {
     fn delete(&mut self, key: &str);
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum CacheOperation {
+    Set,
+    Get,
+    Delete,
+}
+
+impl From<u8> for CacheOperation {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Self::Set,
+            1 => Self::Get,
+            2 => Self::Delete,
+            _ => panic!("Invalid cache operation"),
+        }
+    }
+}
+
 pub struct InMemoryCache {
     map: HashMap<String, Vec<u8>>,
 }

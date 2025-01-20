@@ -1,46 +1,76 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::cache::CacheOperation;
+use ring::digest::{digest, SHA256};
+
 #[derive(Debug, Clone)]
 pub struct Transaction {
+    pub node_id: u16,
     pub client_id: u16,
     pub data_name: String,
-    pub operation: u8,
-    pub signature: Vec<u8>,
-    pub data: Vec<u8>,
+    pub operation: CacheOperation,
+    pub timestamp: u64,
+    pub hash: [u8; 32],
 }
 
 impl Transaction {
-    pub fn new(
-        client_id: u16,
-        data_name: String,
-        operation: u8,
-        signature: Vec<u8>,
-        data: Vec<u8>,
-    ) -> Self {
+    pub fn new(node_id: u16, client_id: u16, data_name: String, operation: CacheOperation) -> Self {
+        assert!(data_name.len() <= 64, "Data name too long");
+        let mut hash = [0; 32];
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        hash.copy_from_slice(
+            digest(
+                &SHA256,
+                format!(
+                    "{:?}.{:?}.{:?}.{:?}.{:?}",
+                    node_id, client_id, data_name, operation, timestamp
+                )
+                .as_bytes(),
+            )
+            .as_ref(),
+        );
         Self {
+            node_id,
             client_id,
             data_name,
             operation,
-            signature,
-            data,
+            timestamp,
+            hash,
         }
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
+        assert!(bytes.len() == 109, "Invalid transaction length");
         Self {
-            client_id: u16::from_le_bytes(bytes[0..2].try_into().unwrap()),
-            data_name: String::from_utf8(bytes[2..].to_vec()).unwrap(),
-            operation: bytes[2 + bytes[2..].len()],
-            signature: bytes[3 + bytes[2..].len()..].to_vec(),
-            data: bytes[3 + bytes[2..].len() + bytes[3 + bytes[2..].len()..].len()..].to_vec(),
+            node_id: u16::from_le_bytes(bytes[0..2].try_into().unwrap()),
+            client_id: u16::from_le_bytes(bytes[2..4].try_into().unwrap()),
+            data_name: String::from_utf8(
+                bytes[4..68]
+                    .to_vec()
+                    .into_iter()
+                    .take_while(|&b| b != 0)
+                    .collect(),
+            )
+            .unwrap(),
+            operation: CacheOperation::from(bytes[68]),
+            timestamp: u64::from_le_bytes(bytes[69..77].try_into().unwrap()),
+            hash: bytes[77..109].try_into().unwrap(),
         }
     }
 
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.node_id.to_le_bytes());
         bytes.extend_from_slice(&self.client_id.to_le_bytes());
-        bytes.extend_from_slice(&self.data_name.as_bytes());
-        bytes.extend_from_slice(&self.operation.to_le_bytes());
-        bytes.extend_from_slice(&self.signature);
-        bytes.extend_from_slice(&self.data);
+        let mut name_bytes = [0u8; 64];
+        name_bytes[..self.data_name.len()].copy_from_slice(self.data_name.as_bytes());
+        bytes.extend_from_slice(&name_bytes);
+        bytes.push(self.operation as u8);
+        bytes.extend_from_slice(&self.timestamp.to_le_bytes());
+        bytes.extend_from_slice(&self.hash);
         bytes
     }
 }

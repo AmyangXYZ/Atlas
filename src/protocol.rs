@@ -201,18 +201,13 @@ impl SyncPayload {
 #[derive(Debug, Clone)]
 pub struct DataPayload {
     pub name: String, // max 64 bytes
-    pub signature: [u8; 64],
     pub data: Vec<u8>,
 }
 
 impl DataPayload {
-    pub fn new(name: String, signature: [u8; 64], data: Vec<u8>) -> Self {
+    pub fn new(name: String, data: Vec<u8>) -> Self {
         assert!(name.len() <= 64, "Name must not exceed 64 bytes");
-        Self {
-            name,
-            signature,
-            data,
-        }
+        Self { name, data }
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
@@ -225,14 +220,9 @@ impl DataPayload {
         )
         .unwrap();
 
-        let signature: [u8; 64] = bytes[64..128].try_into().unwrap();
-        let data = bytes[128..].to_vec();
+        let data = bytes[64..].to_vec();
 
-        Self {
-            name,
-            signature,
-            data,
-        }
+        Self { name, data }
     }
 
     pub fn as_bytes(&self) -> Vec<u8> {
@@ -241,8 +231,6 @@ impl DataPayload {
         let mut name_bytes = [0u8; 64];
         name_bytes[..self.name.len()].copy_from_slice(self.name.as_bytes());
         bytes.extend_from_slice(&name_bytes);
-
-        bytes.extend_from_slice(&self.signature);
         bytes.extend_from_slice(&self.data);
         bytes
     }
@@ -251,19 +239,28 @@ impl DataPayload {
 #[derive(Debug, Clone)]
 pub struct TransactionPayload {
     pub transaction: Transaction,
+    pub signature: [u8; 64],
 }
 
 impl TransactionPayload {
-    pub fn new(transaction: Transaction) -> Self {
-        Self { transaction }
+    pub fn new(transaction: Transaction, signature: [u8; 64]) -> Self {
+        Self {
+            transaction,
+            signature,
+        }
     }
     pub fn from_bytes(bytes: &[u8]) -> Self {
+        assert!(bytes.len() == 173, "Invalid transaction payload length");
         Self {
-            transaction: Transaction::from_bytes(bytes),
+            transaction: Transaction::from_bytes(&bytes[0..109]),
+            signature: bytes[109..173].try_into().unwrap(),
         }
     }
     pub fn as_bytes(&self) -> Vec<u8> {
-        self.transaction.as_bytes()
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.transaction.as_bytes());
+        bytes.extend_from_slice(&self.signature);
+        bytes
     }
 }
 
