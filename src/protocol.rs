@@ -127,11 +127,11 @@ impl AckPayload {
 #[derive(Debug, Clone)]
 pub struct ProbePayload {
     pub node_id: u16,
-    pub public_key: Vec<u8>,
+    pub public_key: [u8; 32],
 }
 
 impl ProbePayload {
-    pub fn new(node_id: u16, public_key: Vec<u8>) -> Self {
+    pub fn new(node_id: u16, public_key: [u8; 32]) -> Self {
         Self {
             node_id,
             public_key,
@@ -141,7 +141,7 @@ impl ProbePayload {
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
             node_id: u16::from_le_bytes(bytes[0..2].try_into().unwrap()),
-            public_key: bytes[2..].to_vec(),
+            public_key: bytes[2..34].try_into().unwrap(),
         }
     }
 
@@ -156,7 +156,7 @@ impl ProbePayload {
 #[derive(Debug, Clone)]
 pub struct SyncPayload {
     pub node_id: u16,
-    pub public_key: Vec<u8>,
+    pub public_key: [u8; 32],
     pub chain_height: u32,
     pub last_block_hash: [u8; 32],
     pub last_block_timestamp: u64,
@@ -165,7 +165,7 @@ pub struct SyncPayload {
 impl SyncPayload {
     pub fn new(
         node_id: u16,
-        public_key: Vec<u8>,
+        public_key: [u8; 32],
         chain_height: u32,
         last_block_hash: [u8; 32],
         last_block_timestamp: u64,
@@ -181,10 +181,10 @@ impl SyncPayload {
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
             node_id: u16::from_le_bytes(bytes[0..2].try_into().unwrap()),
-            public_key: bytes[2..].to_vec(),
-            chain_height: u32::from_le_bytes(bytes[2..6].try_into().unwrap()),
-            last_block_hash: bytes[6..38].try_into().unwrap(),
-            last_block_timestamp: u64::from_le_bytes(bytes[38..46].try_into().unwrap()),
+            public_key: bytes[2..34].try_into().unwrap(),
+            chain_height: u32::from_le_bytes(bytes[34..38].try_into().unwrap()),
+            last_block_hash: bytes[38..70].try_into().unwrap(),
+            last_block_timestamp: u64::from_le_bytes(bytes[70..78].try_into().unwrap()),
         }
     }
     pub fn as_bytes(&self) -> Vec<u8> {
@@ -200,22 +200,48 @@ impl SyncPayload {
 
 #[derive(Debug, Clone)]
 pub struct DataPayload {
-    pub signature: Vec<u8>,
+    pub name: String, // max 64 bytes
+    pub signature: [u8; 64],
     pub data: Vec<u8>,
 }
 
 impl DataPayload {
-    pub fn new(signature: Vec<u8>, data: Vec<u8>) -> Self {
-        Self { signature, data }
-    }
-    pub fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn new(name: String, signature: [u8; 64], data: Vec<u8>) -> Self {
+        assert!(name.len() <= 64, "Name must not exceed 64 bytes");
         Self {
-            signature: bytes[0..64].to_vec(),
-            data: bytes[64..].to_vec(),
+            name,
+            signature,
+            data,
         }
     }
+
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let name = String::from_utf8(
+            bytes[0..64]
+                .to_vec()
+                .into_iter()
+                .take_while(|&b| b != 0)
+                .collect(),
+        )
+        .unwrap();
+
+        let signature: [u8; 64] = bytes[64..128].try_into().unwrap();
+        let data = bytes[128..].to_vec();
+
+        Self {
+            name,
+            signature,
+            data,
+        }
+    }
+
     pub fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
+        let mut bytes = Vec::with_capacity(128 + self.data.len());
+
+        let mut name_bytes = [0u8; 64];
+        name_bytes[..self.name.len()].copy_from_slice(self.name.as_bytes());
+        bytes.extend_from_slice(&name_bytes);
+
         bytes.extend_from_slice(&self.signature);
         bytes.extend_from_slice(&self.data);
         bytes

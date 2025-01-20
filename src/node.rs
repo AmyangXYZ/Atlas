@@ -106,7 +106,11 @@ impl Node {
             self.id,
             0,
             PacketType::Probe,
-            ProbePayload::new(self.id, self.key_pair.public_key().as_ref().to_vec()).as_bytes(),
+            ProbePayload::new(
+                self.id,
+                self.key_pair.public_key().as_ref().try_into().unwrap(),
+            )
+            .as_bytes(),
         );
         self.send(&packet);
     }
@@ -119,7 +123,7 @@ impl Node {
     fn handle_probe(&mut self, packet: Packet) {
         let probe_payload = ProbePayload::from_bytes(&packet.payload);
         self.peer_public_keys
-            .insert(probe_payload.node_id, probe_payload.public_key.clone());
+            .insert(probe_payload.node_id, probe_payload.public_key.to_vec());
 
         if self.chain.len() > 0 {
             let packet = Packet::new(
@@ -128,7 +132,7 @@ impl Node {
                 PacketType::Sync,
                 SyncPayload::new(
                     self.id,
-                    self.key_pair.public_key().as_ref().to_vec(),
+                    self.key_pair.public_key().as_ref().try_into().unwrap(),
                     self.chain.len() as u32,
                     self.chain.last().unwrap().merkle_root,
                     self.chain.last().unwrap().timestamp,
@@ -143,7 +147,7 @@ impl Node {
                 PacketType::Sync,
                 SyncPayload::new(
                     self.id,
-                    self.key_pair.public_key().as_ref().to_vec(),
+                    self.key_pair.public_key().as_ref().try_into().unwrap(),
                     0,
                     [0; 32],
                     0,
@@ -157,7 +161,7 @@ impl Node {
     fn handle_sync(&mut self, packet: &Packet) {
         let sync_payload = SyncPayload::from_bytes(&packet.payload);
         self.peer_public_keys
-            .insert(sync_payload.node_id, sync_payload.public_key.clone());
+            .insert(sync_payload.node_id, sync_payload.public_key.to_vec());
     }
 
     fn handle_data(&mut self, packet: &Packet) {
