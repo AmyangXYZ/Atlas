@@ -20,10 +20,8 @@ impl Block {
             .unwrap()
             .as_secs();
 
-        // Get hashes of all transactions
         let transaction_hashes: Vec<[u8; 32]> = transactions.iter().map(|txn| txn.hash).collect();
 
-        // Calculate merkle root with timestamp and prev_block_hash
         let merkle_root =
             Self::calculate_merkle_root(&transaction_hashes, timestamp, &prev_block_hash);
 
@@ -56,7 +54,6 @@ impl Block {
 
         let mut next_level = Vec::new();
 
-        // Process pairs of hashes
         for chunk in hashes.chunks(2) {
             let mut combined = Vec::with_capacity(64);
             combined.extend_from_slice(&chunk[0]);
@@ -67,7 +64,6 @@ impl Block {
             next_level.push(hash);
         }
 
-        // Recursively calculate root of next level
         Self::calculate_merkle_root(&next_level, timestamp, prev_block_hash)
     }
 }
