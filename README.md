@@ -153,8 +153,8 @@ The blockchain essentially provides a distributed, tamper-proof signal observati
 
 
 Legend:
-<-------> : P2P Communication
-↑ ↓      : Data Flow
+<------> : P2P Communication
+↑↓       : Data Flow
 |        : Connection
 +---+    : System C
 ```
@@ -184,4 +184,25 @@ Physical Receivers & Digital Twins (Distributed Nodes)
 +------------------------------------------+
                     ↓
          Data Analysis & Validation
+
+
+
+
+PHYSICAL WORLD
+      ↓
+Regular GNSS Receivers   [Simple, Standard Hardware]
+      ↓
+      ↓  (Send measurements)
+      ↓
+Blockchain-Enabled Data Service Layer
+- Signal validation service
+- Reference data storage
+- Cross-validation logic
+- Spoofing detection algorithms
+- Alert generation
+      ↓
+      ↓  (Return validated PNT solution)
+      ↓
+End Applications/Users
+
 ```

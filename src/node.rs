@@ -1,8 +1,8 @@
 use crate::block::{Block, BLOCK_PERIOD};
 use crate::cache::CacheOperation;
 use crate::protocol::{
-    AckPayload, BlockPayload, DataPayload, Packet, PacketType, ProbePayload, SyncPayload,
-    TransactionPayload, ACK_TIMEOUT, MAX_RETRIES, PACKET_BUFFER_SIZE,
+    AckPayload, BlockPayload, ChainPayload, DataPayload, Packet, PacketType, ProbePayload,
+    SyncPayload, TransactionPayload, ACK_TIMEOUT, MAX_RETRIES, PACKET_BUFFER_SIZE,
 };
 use crate::transaction::Transaction;
 use crate::{cache::Cache, cache::InMemoryCache};
@@ -11,6 +11,18 @@ use ring::signature::{self, Ed25519KeyPair, KeyPair, Signature, UnparsedPublicKe
 use std::collections::HashMap;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+fn system_log(node_id: u16, message: impl std::fmt::Display) {
+    if true {
+        println!("<SYSTEM> {} {}", node_id, message);
+    }
+}
+
+fn network_log(node_id: u16, message: impl std::fmt::Display) {
+    if true {
+        println!("<PACKET> {} {}", node_id, message);
+    }
+}
 
 pub struct Node {
     id: u16,
@@ -78,12 +90,14 @@ impl Node {
             };
             self.addr_table.insert(packet.src, addr.to_string());
 
-            println!(
-                "[{:?}] Received {:?}-0x{:X} from {:?}",
+            network_log(
                 self.id,
-                PacketType::from(packet.packet_type),
-                packet.packet_id,
-                packet.src
+                format!(
+                    "Received {:?}-0x{:X} from {:?}",
+                    PacketType::from(packet.packet_type),
+                    packet.packet_id,
+                    packet.src
+                ),
             );
             if PacketType::from(packet.packet_type) != PacketType::Ack {
                 self.reply_ack(&packet);
@@ -92,7 +106,10 @@ impl Node {
                 PacketType::Ack => self.handle_ack(&packet),
                 PacketType::Probe => self.handle_probe(packet),
                 PacketType::Sync => self.handle_sync(&packet),
-                PacketType::Data => self.handle_data(&packet),
+                PacketType::SetData => self.handle_set_data(&packet),
+                PacketType::GetData => self.handle_get_data(&packet),
+                PacketType::GetChain => self.handle_get_chain(&packet),
+                PacketType::Chain => self.handle_chain(&packet),
                 PacketType::Transaction => self.handle_transaction(&packet),
                 PacketType::Block => self.handle_block(&packet),
             }
@@ -120,13 +137,23 @@ impl Node {
             },
         );
 
-        self.chain.push(block);
-        println!(
-            "[{:?}] Created block #{:?} {:?}",
+        let block_payload = BlockPayload::new(block.clone());
+        system_log(
             self.id,
-            self.chain.len(),
-            self.chain.last().unwrap()
+            format!(
+                "Created block #{:?} {}",
+                self.chain.len(),
+                hex_string(&block.merkle_root)
+            ),
         );
+        self.chain.push(block);
+
+        let peers: Vec<u16> = self.peer_public_keys.keys().copied().collect();
+        for peer in peers {
+            let block_packet =
+                Packet::new(self.id, peer, PacketType::Block, block_payload.as_bytes());
+            self.send(&block_packet);
+        }
     }
 
     fn reply_ack(&mut self, packet: &Packet) {
@@ -163,6 +190,15 @@ impl Node {
         let probe_payload = ProbePayload::from_bytes(&packet.payload);
         self.peer_public_keys
             .insert(probe_payload.node_id, probe_payload.public_key.to_vec());
+
+        system_log(
+            self.id,
+            format!(
+                "Added public key of {:?}: {}",
+                probe_payload.node_id,
+                hex_string(&probe_payload.public_key)
+            ),
+        );
 
         if !self.chain.is_empty() {
             let sync_packet = Packet::new(
@@ -201,21 +237,39 @@ impl Node {
         let sync_payload = SyncPayload::from_bytes(&packet.payload);
         self.peer_public_keys
             .insert(sync_payload.node_id, sync_payload.public_key.to_vec());
+
+        system_log(
+            self.id,
+            format!(
+                "Added public key of {:?}: {}",
+                sync_payload.node_id,
+                hex_string(&sync_payload.public_key)
+            ),
+        );
+
+        if self.chain.len() < sync_payload.chain_height as usize {
+            let get_chain_packet =
+                Packet::new(self.id, sync_payload.node_id, PacketType::GetChain, vec![]);
+            self.send(&get_chain_packet);
+        }
     }
 
-    fn handle_data(&mut self, packet: &Packet) {
+    fn handle_set_data(&mut self, packet: &Packet) {
         let data_payload = DataPayload::from_bytes(&packet.payload);
         self.cache
             .set(data_payload.name.as_str(), data_payload.data.as_ref());
-        println!(
-            "[{:?}] Cached data {:?} ({:?} bytes)",
+        system_log(
             self.id,
-            data_payload.name,
-            data_payload.data.len()
+            format!(
+                "Cached data {:?} ({:?} bytes)",
+                data_payload.name,
+                data_payload.data.len()
+            ),
         );
 
         let txn = Transaction::new(self.id, packet.src, data_payload.name, CacheOperation::Set);
         let sig = self.sign(txn.as_bytes());
+        let txn_payload = TransactionPayload::new(txn.clone(), sig.as_ref().try_into().unwrap());
         self.pending_transactions.insert(txn.hash, txn.clone());
 
         let peers: Vec<u16> = self.peer_public_keys.keys().copied().collect();
@@ -224,19 +278,56 @@ impl Node {
                 self.id,
                 peer,
                 PacketType::Transaction,
-                TransactionPayload::new(txn.clone(), sig.as_ref().try_into().unwrap()).as_bytes(),
+                txn_payload.as_bytes(),
             );
 
             self.send(&txn_packet);
         }
     }
 
+    fn handle_get_data(&mut self, packet: &Packet) {
+        let data_payload = DataPayload::from_bytes(&packet.payload);
+        self.cache.get(data_payload.name.as_str());
+    }
+
+    fn handle_chain(&mut self, packet: &Packet) {
+        let chain_payload = ChainPayload::from_bytes(&packet.payload);
+        system_log(
+            self.id,
+            format!(
+                "Received chain of {} blocks from {:?}",
+                chain_payload.chain.len(),
+                packet.src
+            ),
+        );
+        self.chain = chain_payload.chain;
+    }
+
+    fn handle_get_chain(&mut self, packet: &Packet) {
+        let chain_payload = ChainPayload::new(self.chain.clone());
+        system_log(
+            self.id,
+            format!(
+                "Sending chain of {} blocks to {:?}",
+                chain_payload.chain.len(),
+                packet.src
+            ),
+        );
+        let chain_packet = Packet::new(
+            self.id,
+            packet.src,
+            PacketType::Chain,
+            chain_payload.as_bytes(),
+        );
+        self.send(&chain_packet);
+    }
+
     fn handle_transaction(&mut self, packet: &Packet) {
         let transaction_payload = TransactionPayload::from_bytes(&packet.payload);
         let Some(public_key) = self.peer_public_keys.get(&packet.src) else {
-            println!(
-                "[{:?}] No public key found for node {}",
-                self.id, packet.src
+            system_log(
+                self.id,
+                format!("No public key found for node {}", packet.src),
             );
             return;
         };
@@ -246,35 +337,60 @@ impl Node {
             signature.as_ref(),
             public_key,
         ) {
-            println!(
-                "[{:?}] Transaction verified: client {} {:?} data {:?} at node {} on {}",
+            system_log(
                 self.id,
-                transaction_payload.transaction.client_id,
-                transaction_payload.transaction.operation,
-                transaction_payload.transaction.data_name,
-                transaction_payload.transaction.node_id,
-                transaction_payload.transaction.timestamp
+                format!(
+                    "Transaction verified: client {} {:?} data {:?} at node {} on {}",
+                    transaction_payload.transaction.client_id,
+                    transaction_payload.transaction.operation,
+                    transaction_payload.transaction.data_name,
+                    transaction_payload.transaction.node_id,
+                    transaction_payload.transaction.timestamp
+                ),
             );
             self.pending_transactions.insert(
                 transaction_payload.transaction.hash,
                 transaction_payload.transaction,
+            );
+        } else {
+            system_log(
+                self.id,
+                format!(
+                    "Transaction verification failed: client {} {:?} data {:?} at node {} on {}",
+                    transaction_payload.transaction.client_id,
+                    transaction_payload.transaction.operation,
+                    transaction_payload.transaction.data_name,
+                    transaction_payload.transaction.node_id,
+                    transaction_payload.transaction.timestamp
+                ),
             );
         }
     }
 
     fn handle_block(&mut self, packet: &Packet) {
         let block_payload = BlockPayload::from_bytes(&packet.payload);
+        system_log(
+            self.id,
+            format!(
+                "Received block #{:?} {}",
+                self.chain.len(),
+                hex_string(&block_payload.block.merkle_root)
+            ),
+        );
         self.chain.push(block_payload.block);
     }
 
     fn send(&mut self, packet: &Packet) {
-        println!(
-            "[{:?}] Sending {:?}-0x{:X} to {:?}",
+        network_log(
             self.id,
-            PacketType::from(packet.packet_type),
-            packet.packet_id,
-            packet.dst
+            format!(
+                "Sending {:?}-0x{:X} to {:?}",
+                PacketType::from(packet.packet_type),
+                packet.packet_id,
+                packet.dst
+            ),
         );
+
         if let Some(dst_addr) = self.addr_table.get(&packet.dst) {
             self.socket.send_to(&packet.as_bytes(), dst_addr).unwrap();
             if PacketType::from(packet.packet_type) != PacketType::Ack {
@@ -299,25 +415,36 @@ impl Node {
             let (retries, _, packet) = self.pending_acks.remove(&packet_id).unwrap();
             if retries < MAX_RETRIES {
                 if let Some(dst_addr) = self.addr_table.get(&packet.dst) {
-                    println!(
-                        "[{:?}] Retransmitting {:?}-0x{:X} (attempt {})",
+                    network_log(
                         self.id,
-                        PacketType::from(packet.packet_type),
-                        packet_id,
-                        retries + 2
+                        format!(
+                            "*Packet* Retransmitting {:?}-0x{:X} (attempt {})",
+                            PacketType::from(packet.packet_type),
+                            packet_id,
+                            retries + 2
+                        ),
                     );
                     self.socket.send_to(&packet.as_bytes(), dst_addr).unwrap();
                     self.pending_acks
                         .insert(packet_id, (retries + 1, Instant::now(), packet));
                 }
             } else {
-                println!(
-                    "[{:?}] Packet {:?}-0x{:X} failed after 3 retries",
+                network_log(
                     self.id,
-                    PacketType::from(packet.packet_type),
-                    packet_id
+                    format!(
+                        "*Packet* {:?}-0x{:X} failed after 3 retries",
+                        PacketType::from(packet.packet_type),
+                        packet_id
+                    ),
                 );
             }
         }
     }
+}
+
+fn hex_string(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
 }

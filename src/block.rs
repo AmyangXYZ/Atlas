@@ -7,10 +7,10 @@ pub const BLOCK_PERIOD: u64 = 10; // seconds
 
 #[derive(Debug, Clone)]
 pub struct Block {
-    pub transactions: Vec<Transaction>,
     pub merkle_root: [u8; 32],
     pub prev_block_hash: [u8; 32],
     pub timestamp: u64,
+    pub transactions: Vec<Transaction>,
 }
 
 impl Block {
@@ -26,11 +26,36 @@ impl Block {
             Self::calculate_merkle_root(&transaction_hashes, timestamp, &prev_block_hash);
 
         Self {
-            transactions,
             merkle_root,
             prev_block_hash,
             timestamp,
+            transactions,
         }
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let transactions = bytes[72..]
+            .chunks(109)
+            .map(|txn| Transaction::from_bytes(txn))
+            .collect();
+
+        Self {
+            merkle_root: bytes[0..32].try_into().unwrap(),
+            prev_block_hash: bytes[32..64].try_into().unwrap(),
+            timestamp: u64::from_le_bytes(bytes[64..72].try_into().unwrap()),
+            transactions,
+        }
+    }
+
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.merkle_root);
+        bytes.extend_from_slice(&self.prev_block_hash);
+        bytes.extend_from_slice(&self.timestamp.to_be_bytes());
+        for transaction in &self.transactions {
+            bytes.extend_from_slice(&transaction.as_bytes());
+        }
+        bytes
     }
 
     fn calculate_merkle_root(

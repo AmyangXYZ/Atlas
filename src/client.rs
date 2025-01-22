@@ -18,13 +18,30 @@ impl Client {
         }
     }
 
-    pub fn set(&mut self, data_name: &str, data: &[u8]) {
+    pub fn get_chain(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+
+    pub fn get_data(&mut self, data_name: &str) -> Option<Vec<u8>> {
+        let data_packet = Packet::new(
+            self.id,
+            0,
+            PacketType::GetData,
+            DataPayload::new(data_name.to_string(), vec![]).as_bytes(),
+        );
+        self.socket
+            .send_to(&data_packet.as_bytes(), &self.remote_addr)
+            .unwrap();
+        None
+    }
+
+    pub fn set_data(&mut self, data_name: &str, data: &[u8]) {
         let mut attempts = 0;
         while attempts <= MAX_RETRIES {
             let data_packet = Packet::new(
                 self.id,
                 0,
-                PacketType::Data,
+                PacketType::SetData,
                 DataPayload::new(data_name.to_string(), data.to_vec()).as_bytes(),
             );
             self.socket

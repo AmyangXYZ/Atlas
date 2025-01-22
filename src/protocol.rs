@@ -11,9 +11,12 @@ pub const ACK_TIMEOUT: u64 = 500; // milliseconds
 pub enum PacketType {
     Probe,
     Sync,
-    Transaction,
+    SetData,
+    GetData,
+    GetChain,
+    Chain,
     Block,
-    Data,
+    Transaction,
     Ack,
 }
 
@@ -22,10 +25,13 @@ impl From<u8> for PacketType {
         match value {
             0 => PacketType::Probe,
             1 => PacketType::Sync,
-            2 => PacketType::Transaction,
-            3 => PacketType::Block,
-            4 => PacketType::Data,
-            5 => PacketType::Ack,
+            2 => PacketType::SetData,
+            3 => PacketType::GetData,
+            4 => PacketType::GetChain,
+            5 => PacketType::Chain,
+            6 => PacketType::Block,
+            7 => PacketType::Transaction,
+            8 => PacketType::Ack,
             _ => panic!("Invalid packet type"),
         }
     }
@@ -250,7 +256,11 @@ impl TransactionPayload {
         }
     }
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        assert!(bytes.len() == 173, "Invalid transaction payload length");
+        assert!(
+            bytes.len() == 173,
+            "Invalid transaction payload length, expected 173, got {:?}",
+            bytes.len()
+        );
         Self {
             transaction: Transaction::from_bytes(&bytes[0..109]),
             signature: bytes[109..173].try_into().unwrap(),
@@ -275,14 +285,50 @@ impl BlockPayload {
     }
     pub fn from_bytes(bytes: &[u8]) -> Self {
         Self {
-            block: Block::new(vec![], bytes[32..64].try_into().unwrap()),
+            block: Block::from_bytes(&bytes),
         }
     }
     pub fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&self.block.prev_block_hash);
-        for transaction in &self.block.transactions {
-            bytes.extend_from_slice(&transaction.as_bytes());
+        bytes.extend_from_slice(&self.block.as_bytes());
+        bytes
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ChainPayload {
+    pub chain: Vec<Block>,
+}
+
+impl ChainPayload {
+    pub fn new(chain: Vec<Block>) -> Self {
+        Self { chain }
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut blocks = Vec::new();
+        let mut offset = 0;
+
+        while offset + 2 <= bytes.len() {
+            let size = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap()) as usize;
+            if offset + 2 + size > bytes.len() {
+                break;
+            }
+            let block = Block::from_bytes(&bytes[offset + 2..offset + 2 + size]);
+            blocks.push(block);
+
+            offset += 2 + size;
+        }
+
+        Self { chain: blocks }
+    }
+
+    pub fn as_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for block in &self.chain {
+            let block_bytes = block.as_bytes();
+            bytes.extend_from_slice(&(block_bytes.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&block_bytes);
         }
         bytes
     }

@@ -43,7 +43,11 @@ impl Transaction {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        assert!(bytes.len() == 109, "Invalid transaction length");
+        assert!(
+            bytes.len() == 109,
+            "Invalid transaction length, expected 109, got {:?}",
+            bytes.len()
+        );
         Self {
             node_id: u16::from_le_bytes(bytes[0..2].try_into().unwrap()),
             client_id: u16::from_le_bytes(bytes[2..4].try_into().unwrap()),
