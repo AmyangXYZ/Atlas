@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cache::CacheOperation;
+use crate::utils::serialize_hash;
 use ring::digest::{digest, SHA256};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,6 +12,7 @@ pub struct Transaction {
     pub data_name: String,
     pub operation: CacheOperation,
     pub timestamp: u64,
+    #[serde(serialize_with = "serialize_hash")]
     pub hash: [u8; 32],
 }
 

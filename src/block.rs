@@ -3,12 +3,15 @@ use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::transaction::Transaction;
+use crate::utils::serialize_hash;
 
 pub const BLOCK_PERIOD: u64 = 10; // seconds
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
+    #[serde(serialize_with = "serialize_hash")]
     pub merkle_root: [u8; 32],
+    #[serde(serialize_with = "serialize_hash")]
     pub prev_block_hash: [u8; 32],
     pub timestamp: u64,
     pub transactions: Vec<Transaction>,

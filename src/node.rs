@@ -5,6 +5,7 @@ use crate::protocol::{
     SyncPayload, TransactionPayload, ACK_TIMEOUT, MAX_RETRIES, PACKET_BUFFER_SIZE,
 };
 use crate::transaction::Transaction;
+use crate::utils::hex_string;
 use crate::web::{WebServer, WebSignal};
 use crate::{cache::Cache, cache::InMemoryCache};
 use ring::rand;
@@ -14,7 +15,6 @@ use std::net::UdpSocket;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
 const ATLAS_PORT: u16 = 47145;
 const WEB_PORT: u16 = 47100;
 
@@ -500,11 +500,4 @@ impl Node {
             println!("<PACKET> {} {}", self.id, message);
         }
     }
-}
-
-fn hex_string(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>()
 }
