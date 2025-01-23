@@ -13,6 +13,7 @@ pub enum PacketType {
     Sync,
     SetData,
     GetData,
+    Data,
     GetChain,
     Chain,
     Block,
@@ -27,16 +28,18 @@ impl From<u8> for PacketType {
             1 => PacketType::Sync,
             2 => PacketType::SetData,
             3 => PacketType::GetData,
-            4 => PacketType::GetChain,
-            5 => PacketType::Chain,
-            6 => PacketType::Block,
-            7 => PacketType::Transaction,
-            8 => PacketType::Ack,
+            4 => PacketType::Data,
+            5 => PacketType::GetChain,
+            6 => PacketType::Chain,
+            7 => PacketType::Block,
+            8 => PacketType::Transaction,
+            9 => PacketType::Ack,
             _ => panic!("Invalid packet type"),
         }
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Packet {
     pub magic_number: u32,
     pub packet_id: u32,

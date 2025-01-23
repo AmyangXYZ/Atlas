@@ -5,3 +5,5 @@ edition = "2021"
 
 [dependencies]
 ring = "0.17.8"
+sha1 = "0.10.5"
+base64 = "0.21.0"

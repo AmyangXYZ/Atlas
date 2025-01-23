@@ -24,6 +24,7 @@ impl From<u8> for CacheOperation {
     }
 }
 
+#[derive(Debug)]
 pub struct InMemoryCache {
     map: HashMap<String, Vec<u8>>,
 }
