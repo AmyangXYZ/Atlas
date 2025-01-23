@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub trait Cache {
@@ -6,7 +7,7 @@ pub trait Cache {
     fn delete(&mut self, key: &str);
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum CacheOperation {
     Set,
     Get,

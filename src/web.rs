@@ -6,45 +6,56 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::channel;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
 type WebSocketConnections = Arc<Mutex<HashMap<usize, std::net::TcpStream>>>;
 
+pub enum WebSignal {
+    GetChain { client_id: usize },
+    GetPeers { client_id: usize },
+}
+
 #[derive(Debug)]
 pub struct WebServer {
     listener: TcpListener,
     connections: WebSocketConnections,
+    signal_tx: Sender<WebSignal>,
 }
 
 impl WebServer {
-    pub fn new(address: &str) -> Self {
+    pub fn new(address: &str) -> (Arc<Self>, Receiver<WebSignal>) {
+        let (tx, rx) = channel();
         let listener = TcpListener::bind(address).unwrap();
         let connections = Arc::new(Mutex::new(HashMap::new()));
-        Self {
+
+        let server = Self {
             listener,
             connections,
-        }
+            signal_tx: tx,
+        };
+
+        (Arc::new(server), rx)
     }
 
-    pub fn run(self) -> Arc<Self> {
+    pub fn run(self: &Arc<Self>) {
         println!(
             "Web server running on {}",
             self.listener.local_addr().unwrap()
         );
 
-        let server = Arc::new(self);
-        let server_clone = Arc::clone(&server);
-
+        let server_clone = Arc::clone(self);
         thread::spawn(move || {
             for stream in server_clone.listener.incoming() {
                 let connections = Arc::clone(&server_clone.connections);
-                thread::spawn(move || Self::handle_request(stream.unwrap(), connections));
+                let server = Arc::clone(&server_clone);
+                thread::spawn(move || server.handle_request(stream.unwrap(), connections));
             }
         });
-
-        server
     }
 
     // New methods for WebSocket API
@@ -52,7 +63,7 @@ impl WebServer {
         let connections = self.connections.lock().unwrap();
         for stream in connections.values() {
             if let Ok(mut stream) = stream.try_clone() {
-                let _ = Self::send_frame(&mut stream, message);
+                let _ = self.send_frame(&mut stream, message);
             }
         }
     }
@@ -61,7 +72,7 @@ impl WebServer {
         let connections = self.connections.lock().unwrap();
         if let Some(stream) = connections.get(&client_id) {
             if let Ok(mut stream) = stream.try_clone() {
-                Self::send_frame(&mut stream, message);
+                self.send_frame(&mut stream, message);
                 return true;
             }
         }
@@ -72,20 +83,21 @@ impl WebServer {
         self.connections.lock().unwrap().keys().cloned().collect()
     }
 
-    fn handle_request(mut stream: std::net::TcpStream, connections: WebSocketConnections) {
+    fn handle_request(&self, mut stream: std::net::TcpStream, connections: WebSocketConnections) {
         let mut buffer = [0; 8192];
         stream.read(&mut buffer).unwrap();
 
         let request = String::from_utf8_lossy(&buffer[..]);
 
         if request.contains("Upgrade: websocket") {
-            Self::handle_websocket(&mut stream, &request, connections);
+            self.handle_websocket(&mut stream, &request, connections);
         } else {
-            Self::handle_http(&mut stream, &request);
+            self.handle_http(&mut stream, &request);
         }
     }
 
     fn handle_websocket(
+        &self,
         stream: &mut std::net::TcpStream,
         request: &str,
         connections: WebSocketConnections,
@@ -101,7 +113,7 @@ impl WebServer {
             .trim();
 
         // Generate accept key
-        let accept_key = Self::generate_accept_key(key);
+        let accept_key = self.generate_accept_key(key);
 
         // Send upgrade response
         let response = format!(
@@ -120,10 +132,11 @@ impl WebServer {
         connections.lock().unwrap().insert(id, stream_clone);
 
         // Handle frames
-        Self::handle_websocket_frames(stream, id, connections);
+        self.handle_websocket_frames(stream, id, connections);
     }
 
     fn handle_websocket_frames(
+        &self,
         stream: &mut std::net::TcpStream,
         id: usize,
         connections: WebSocketConnections,
@@ -133,8 +146,10 @@ impl WebServer {
             match stream.read(&mut buffer) {
                 Ok(n) if n > 0 => {
                     // Just keep the connection alive by reading messages
-                    let _ = Self::decode_frame(&buffer[..n]);
-                    Self::send_frame(stream, b"Hello");
+                    let _ = self.decode_frame(&buffer[..n]);
+                    // Self::send_frame(stream, b"Hello");
+                    let _ = self.signal_tx.send(WebSignal::GetChain { client_id: id });
+                    let _ = self.signal_tx.send(WebSignal::GetPeers { client_id: id });
                 }
                 _ => {
                     // Remove connection when it's closed
@@ -145,7 +160,7 @@ impl WebServer {
         }
     }
 
-    fn get_content_type(path: &str) -> &str {
+    fn get_content_type(&self, path: &str) -> &str {
         match path.split('.').last().unwrap_or("") {
             "txt" => "text/plain",
             "html" => "text/html",
@@ -165,7 +180,7 @@ impl WebServer {
         }
     }
 
-    fn handle_http(stream: &mut std::net::TcpStream, request: &str) {
+    fn handle_http(&self, stream: &mut std::net::TcpStream, request: &str) {
         let path = request
             .lines()
             .next()
@@ -187,7 +202,7 @@ impl WebServer {
                 "HTTP/1.1 200 OK\r\n\
                     Content-Type: {}\r\n\
                     Content-Length: {}\r\n\r\n",
-                Self::get_content_type(&file_path.to_string_lossy()),
+                self.get_content_type(&file_path.to_string_lossy()),
                 content.len()
             )
             .into_bytes()
@@ -205,7 +220,7 @@ impl WebServer {
         stream.write(&response).unwrap();
     }
 
-    fn generate_accept_key(key: &str) -> String {
+    fn generate_accept_key(&self, key: &str) -> String {
         let mut hasher = Sha1::new();
         hasher.update(format!("{}258EAFA5-E914-47DA-95CA-C5AB0DC85B11", key).as_bytes());
         base64::Engine::encode(
@@ -214,7 +229,7 @@ impl WebServer {
         )
     }
 
-    fn decode_frame(buffer: &[u8]) -> Option<Vec<u8>> {
+    fn decode_frame(&self, buffer: &[u8]) -> Option<Vec<u8>> {
         if buffer.len() < 2 {
             return None;
         }
@@ -242,7 +257,7 @@ impl WebServer {
         }
     }
 
-    fn send_frame(stream: &mut std::net::TcpStream, payload: &[u8]) {
+    fn send_frame(&self, stream: &mut std::net::TcpStream, payload: &[u8]) {
         let mut frame = vec![0x81]; // FIN + Text frame
 
         if payload.len() < 126 {

@@ -1,11 +1,12 @@
 use ring::digest::{digest, SHA256};
+use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::transaction::Transaction;
 
 pub const BLOCK_PERIOD: u64 = 10; // seconds
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     pub merkle_root: [u8; 32],
     pub prev_block_hash: [u8; 32],

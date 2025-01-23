@@ -1,9 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cache::CacheOperation;
 use ring::digest::{digest, SHA256};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transaction {
     pub node_id: u16,
     pub client_id: u16,

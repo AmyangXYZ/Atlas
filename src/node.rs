@@ -5,12 +5,13 @@ use crate::protocol::{
     SyncPayload, TransactionPayload, ACK_TIMEOUT, MAX_RETRIES, PACKET_BUFFER_SIZE,
 };
 use crate::transaction::Transaction;
-use crate::web::WebServer;
+use crate::web::{WebServer, WebSignal};
 use crate::{cache::Cache, cache::InMemoryCache};
 use ring::rand;
 use ring::signature::{self, Ed25519KeyPair, KeyPair, Signature, UnparsedPublicKey};
 use std::collections::HashMap;
 use std::net::UdpSocket;
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -23,6 +24,7 @@ pub struct Node {
     addr_table: HashMap<u16, String>,
     pending_acks: HashMap<u32, (u8, Instant, Packet)>,
     web_server: Arc<WebServer>,
+    web_signal_rx: Receiver<WebSignal>,
     cache: InMemoryCache,
     key_pair: Ed25519KeyPair,
     peer_public_keys: HashMap<u16, Vec<u8>>,
@@ -40,12 +42,15 @@ impl Node {
         socket
             .set_read_timeout(Some(Duration::from_millis(10)))
             .unwrap();
+        let (web_server, rx) = WebServer::new(&format!("{}:{}", ip_address, WEB_PORT));
+
         Self {
             id,
             socket,
             addr_table: HashMap::new(),
             pending_acks: HashMap::new(),
-            web_server: WebServer::new(&format!("{}:{}", ip_address, WEB_PORT)).run(),
+            web_server,
+            web_signal_rx: rx,
             cache: InMemoryCache::new(),
             leader: 0,
             key_pair: Ed25519KeyPair::from_pkcs8(pkcs8_bytes.as_ref()).unwrap(),
@@ -60,8 +65,13 @@ impl Node {
             self.send_probe(&format!("127.0.0.1:{}", ATLAS_PORT));
         }
         let mut buffer = [0; PACKET_BUFFER_SIZE];
+        self.web_server.run();
         loop {
             self.check_ack_timeouts();
+
+            if let Ok(signal) = self.web_signal_rx.try_recv() {
+                self.handle_web_signal(signal);
+            }
 
             if self.id == self.leader {
                 let now = SystemTime::now()
@@ -103,6 +113,25 @@ impl Node {
                 PacketType::Transaction => self.handle_transaction(&packet),
                 PacketType::Block => self.handle_block(&packet),
                 _ => (),
+            }
+        }
+    }
+
+    fn handle_web_signal(&mut self, signal: WebSignal) {
+        match signal {
+            WebSignal::GetChain { client_id } => {
+                let json = serde_json::to_string(&self.chain).unwrap_or_else(|e| {
+                    self.system_log(format!("Error serializing chain: {}", e));
+                    String::from("[]")
+                });
+                self.web_server.send_to_client(client_id, json.as_bytes());
+            }
+            WebSignal::GetPeers { client_id } => {
+                let json = serde_json::to_string(&self.peer_public_keys).unwrap_or_else(|e| {
+                    self.system_log(format!("Error serializing peers: {}", e));
+                    String::from("[]")
+                });
+                self.web_server.send_to_client(client_id, json.as_bytes());
             }
         }
     }
