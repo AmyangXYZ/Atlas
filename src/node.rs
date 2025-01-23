@@ -120,18 +120,26 @@ impl Node {
     fn handle_web_signal(&mut self, signal: WebSignal) {
         match signal {
             WebSignal::GetChain { client_id } => {
-                let json = serde_json::to_string(&self.chain).unwrap_or_else(|e| {
-                    self.system_log(format!("Error serializing chain: {}", e));
-                    String::from("[]")
-                });
-                self.web_server.send_to_client(client_id, json.as_bytes());
+                self.web_server.send_to_client(
+                    client_id,
+                    serde_json::json!({
+                        "type": "chain",
+                        "value": self.chain
+                    })
+                    .to_string()
+                    .as_bytes(),
+                );
             }
             WebSignal::GetPeers { client_id } => {
-                let json = serde_json::to_string(&self.peer_public_keys).unwrap_or_else(|e| {
-                    self.system_log(format!("Error serializing peers: {}", e));
-                    String::from("[]")
-                });
-                self.web_server.send_to_client(client_id, json.as_bytes());
+                self.web_server.send_to_client(
+                    client_id,
+                    serde_json::json!({
+                        "type": "peers",
+                        "value": self.addr_table.values().cloned().collect::<Vec<String>>()
+                    })
+                    .to_string()
+                    .as_bytes(),
+                );
             }
         }
     }
@@ -168,6 +176,15 @@ impl Node {
 
             self.send(&txn_packet);
         }
+
+        self.web_server.broadcast_message(
+            serde_json::json!({
+                "type": "transaction",
+                "value": txn
+            })
+            .to_string()
+            .as_bytes(),
+        );
     }
 
     fn create_block(&mut self) {
@@ -188,7 +205,7 @@ impl Node {
             self.chain.len(),
             hex_string(&block.merkle_root)
         ));
-        self.chain.push(block);
+        self.chain.push(block.clone());
 
         let peers: Vec<u16> = self.peer_public_keys.keys().copied().collect();
         for peer in peers {
@@ -196,6 +213,15 @@ impl Node {
                 Packet::new(self.id, peer, PacketType::Block, block_payload.as_bytes());
             self.send(&block_packet);
         }
+
+        self.web_server.broadcast_message(
+            serde_json::json!({
+                "type": "block",
+                "value": block
+            })
+            .to_string()
+            .as_bytes(),
+        );
     }
 
     fn reply_ack(&mut self, packet: &Packet) {
@@ -343,6 +369,12 @@ impl Node {
             chain_payload.as_bytes(),
         );
         self.send(&chain_packet);
+
+        let json = serde_json::to_string(&self.chain).unwrap_or_else(|e| {
+            self.system_log(format!("Error serializing chain: {}", e));
+            String::from("[]")
+        });
+        self.web_server.broadcast_message(json.as_bytes());
     }
 
     fn handle_transaction(&mut self, packet: &Packet) {
@@ -367,8 +399,15 @@ impl Node {
             ));
             self.pending_transactions.insert(
                 transaction_payload.transaction.hash,
-                transaction_payload.transaction,
+                transaction_payload.transaction.clone(),
             );
+
+            let json =
+                serde_json::to_string(&transaction_payload.transaction).unwrap_or_else(|e| {
+                    self.system_log(format!("Error serializing chain: {}", e));
+                    String::from("[]")
+                });
+            self.web_server.broadcast_message(json.as_bytes());
         } else {
             self.system_log(format!(
                 "Transaction verification failed: client {} {:?} data {:?} at node {} on {}",
@@ -388,7 +427,13 @@ impl Node {
             self.chain.len(),
             hex_string(&block_payload.block.merkle_root)
         ));
-        self.chain.push(block_payload.block);
+        self.chain.push(block_payload.block.clone());
+
+        let json = serde_json::to_string(&block_payload.block).unwrap_or_else(|e| {
+            self.system_log(format!("Error serializing chain: {}", e));
+            String::from("[]")
+        });
+        self.web_server.broadcast_message(json.as_bytes());
     }
 
     fn send(&mut self, packet: &Packet) {
@@ -447,7 +492,6 @@ impl Node {
         if true {
             let message = format!("<SYSTEM> {} {}", self.id, message);
             println!("{}", message);
-            self.web_server.broadcast_message(message.as_bytes());
         }
     }
 
