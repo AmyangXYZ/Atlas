@@ -1,5 +1,6 @@
 use base64;
 use sha1::{Digest, Sha1};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -15,9 +16,30 @@ use std::thread;
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
 type WebSocketConnections = Arc<Mutex<HashMap<usize, std::net::TcpStream>>>;
 
+const FRAME_BUFFER: usize = 10 * 1024 * 1024;
+
+thread_local! {
+    static READ_BUFFER: RefCell<Vec<u8>> = RefCell::new(vec![0; FRAME_BUFFER]);
+}
+
 pub enum WebSignal {
-    GetChain { client_id: usize },
-    GetPeers { client_id: usize },
+    GetChain {
+        client_id: usize,
+    },
+    GetPeers {
+        client_id: usize,
+    },
+    GetBlock {
+        client_id: usize,
+        block_index: usize,
+    },
+    GetCache {
+        client_id: usize,
+    },
+    GetTransactions {
+        client_id: usize,
+        data_name: String,
+    },
 }
 
 #[derive(Debug)]
@@ -84,16 +106,21 @@ impl WebServer {
     }
 
     fn handle_request(&self, mut stream: std::net::TcpStream, connections: WebSocketConnections) {
-        let mut buffer = [0; 8192];
-        stream.read(&mut buffer).unwrap();
+        READ_BUFFER.with(|buffer| {
+            let mut buffer = buffer.borrow_mut();
+            buffer.resize(FRAME_BUFFER, 0);
 
-        let request = String::from_utf8_lossy(&buffer[..]);
+            stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..]);
 
-        if request.contains("Upgrade: websocket") {
-            self.handle_websocket(&mut stream, &request, connections);
-        } else {
-            self.handle_http(&mut stream, &request);
-        }
+            if request.contains("Upgrade: websocket") {
+                let request = request.to_string();
+                drop(buffer);
+                self.handle_websocket(&mut stream, &request, connections);
+            } else {
+                self.handle_http(&mut stream, &request);
+            }
+        });
     }
 
     fn handle_websocket(
@@ -141,23 +168,59 @@ impl WebServer {
         id: usize,
         connections: WebSocketConnections,
     ) {
-        let mut buffer = [0; 8192];
-        loop {
-            match stream.read(&mut buffer) {
-                Ok(n) if n > 0 => {
-                    // Just keep the connection alive by reading messages
-                    let _ = self.decode_frame(&buffer[..n]);
-                    // Self::send_frame(stream, b"Hello");
-                    let _ = self.signal_tx.send(WebSignal::GetChain { client_id: id });
-                    let _ = self.signal_tx.send(WebSignal::GetPeers { client_id: id });
-                }
-                _ => {
-                    // Remove connection when it's closed
-                    connections.lock().unwrap().remove(&id);
-                    break;
+        READ_BUFFER.with(|buffer| {
+            let mut buffer = buffer.borrow_mut();
+            loop {
+                buffer.resize(FRAME_BUFFER, 0);
+                match stream.read(&mut buffer) {
+                    Ok(n) if n > 0 => {
+                        if let Some(payload) = self.decode_frame(&buffer[..n]) {
+                            if let Ok(message) = String::from_utf8(payload) {
+                                if let Ok(query) =
+                                    serde_json::from_str::<serde_json::Value>(&message)
+                                {
+                                    match query["data"].as_str() {
+                                        Some("transactions") => {
+                                            if let Some(data_name) = query["params"].as_str() {
+                                                let _ = self.signal_tx.send(
+                                                    WebSignal::GetTransactions {
+                                                        client_id: id,
+                                                        data_name: data_name.to_string(),
+                                                    },
+                                                );
+                                            }
+                                        }
+                                        Some("chain") => {
+                                            let _ = self
+                                                .signal_tx
+                                                .send(WebSignal::GetChain { client_id: id });
+                                        }
+                                        Some("block") => {
+                                            if let Some(block_index) = query["params"].as_u64() {
+                                                let _ = self.signal_tx.send(WebSignal::GetBlock {
+                                                    client_id: id,
+                                                    block_index: block_index as usize,
+                                                });
+                                            }
+                                        }
+                                        Some("peers") => {
+                                            let _ = self
+                                                .signal_tx
+                                                .send(WebSignal::GetPeers { client_id: id });
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        connections.lock().unwrap().remove(&id);
+                        break;
+                    }
                 }
             }
-        }
+        });
     }
 
     fn get_content_type(&self, path: &str) -> &str {

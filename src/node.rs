@@ -120,11 +120,24 @@ impl Node {
     fn handle_web_signal(&mut self, signal: WebSignal) {
         match signal {
             WebSignal::GetChain { client_id } => {
+                let chain_metadata: Vec<_> = self
+                    .chain
+                    .iter()
+                    .map(|block| {
+                        serde_json::json!({
+                            "prev_hash": hex_string(&block.prev_block_hash),
+                            "timestamp": block.timestamp,
+                            "merkle_root": hex_string(&block.merkle_root),
+                            "transaction_count": block.transactions.len()
+                        })
+                    })
+                    .collect();
+
                 self.web_server.send_to_client(
                     client_id,
                     serde_json::json!({
                         "type": "chain",
-                        "value": self.chain
+                        "value": chain_metadata,
                     })
                     .to_string()
                     .as_bytes(),
@@ -141,6 +154,47 @@ impl Node {
                     .as_bytes(),
                 );
             }
+            WebSignal::GetBlock {
+                client_id,
+                block_index,
+            } => {
+                let block = self
+                    .chain
+                    .get(block_index)
+                    .expect("Block index out of bounds");
+                self.web_server.send_to_client(
+                    client_id,
+                    serde_json::json!({
+                        "type": "block",
+                        "value": block
+                    })
+                    .to_string()
+                    .as_bytes(),
+                );
+            }
+            WebSignal::GetTransactions {
+                client_id,
+                data_name,
+            } => {
+                let mut transactions: Vec<Transaction> = Vec::new();
+                for block in &self.chain {
+                    for txn in &block.transactions {
+                        if txn.data_name == data_name {
+                            transactions.push(txn.clone());
+                        }
+                    }
+                }
+                self.web_server.send_to_client(
+                    client_id,
+                    serde_json::json!({
+                        "type": "transactions",
+                        "value": transactions
+                    })
+                    .to_string()
+                    .as_bytes(),
+                );
+            }
+            _ => (),
         }
     }
 
@@ -217,7 +271,12 @@ impl Node {
         self.web_server.broadcast_message(
             serde_json::json!({
                 "type": "block",
-                "value": block
+                "value": {
+                    "prev_block_hash": hex_string(&block.prev_block_hash),
+                    "timestamp": block.timestamp,
+                    "merkle_root": hex_string(&block.merkle_root),
+                    "transaction_count": block.transactions.len()
+                }
             })
             .to_string()
             .as_bytes(),
@@ -428,6 +487,14 @@ impl Node {
             hex_string(&block_payload.block.merkle_root)
         ));
         self.chain.push(block_payload.block.clone());
+
+        for txn in &block_payload.block.transactions {
+            self.pending_transactions.remove(&txn.hash);
+            self.system_log(format!(
+                "Removed transaction {} from pending transactions",
+                hex_string(&txn.hash)
+            ));
+        }
 
         let json = serde_json::to_string(&block_payload.block).unwrap_or_else(|e| {
             self.system_log(format!("Error serializing chain: {}", e));
