@@ -2,12 +2,22 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub trait Cache {
-    fn get(&self, key: &str) -> Option<Vec<u8>>;
+    fn get(&mut self, key: &str) -> Option<Vec<u8>>;
     fn set(&mut self, key: &str, value: &[u8]);
     fn delete(&mut self, key: &str);
+    fn metadata(&self) -> Vec<CachedDataMeta>;
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedDataMeta {
+    name: String,
+    size: usize,
+    last_updated: u64,
+    last_accessed: u64,
+    access_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum CacheOperation {
     Set,
     Get,
@@ -27,7 +37,7 @@ impl From<u8> for CacheOperation {
 
 #[derive(Debug)]
 pub struct InMemoryCache {
-    map: HashMap<String, Vec<u8>>,
+    map: HashMap<String, (Vec<u8>, CachedDataMeta)>,
 }
 
 impl InMemoryCache {
@@ -39,15 +49,53 @@ impl InMemoryCache {
 }
 
 impl Cache for InMemoryCache {
-    fn get(&self, key: &str) -> Option<Vec<u8>> {
-        self.map.get(key).cloned()
+    fn get(&mut self, key: &str) -> Option<Vec<u8>> {
+        if let Some((value, meta)) = self.map.get_mut(key) {
+            meta.access_count += 1;
+            meta.last_accessed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            Some(value.clone())
+        } else {
+            None
+        }
     }
 
     fn set(&mut self, key: &str, value: &[u8]) {
-        self.map.insert(key.to_string(), value.to_vec());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        if let Some((existing_value, meta)) = self.map.get_mut(key) {
+            // Update existing entry
+            *existing_value = value.to_vec();
+            meta.size = value.len();
+            meta.last_updated = now;
+        } else {
+            // Insert new entry
+            self.map.insert(
+                key.to_string(),
+                (
+                    value.to_vec(),
+                    CachedDataMeta {
+                        name: key.to_string(),
+                        size: value.len(),
+                        last_updated: now,
+                        last_accessed: 0,
+                        access_count: 0,
+                    },
+                ),
+            );
+        }
     }
 
     fn delete(&mut self, key: &str) {
         self.map.remove(key);
+    }
+
+    fn metadata(&self) -> Vec<CachedDataMeta> {
+        self.map.iter().map(|(_, value)| value.1.clone()).collect()
     }
 }

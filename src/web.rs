@@ -23,23 +23,10 @@ thread_local! {
 }
 
 pub enum WebSignal {
-    GetChain {
-        client_id: usize,
-    },
-    GetPeers {
-        client_id: usize,
-    },
-    GetBlock {
-        client_id: usize,
-        block_index: usize,
-    },
-    GetCache {
-        client_id: usize,
-    },
-    GetTransactions {
-        client_id: usize,
-        data_name: String,
-    },
+    GetChain { client_id: usize },
+    GetPeers { client_id: usize },
+    GetCache { client_id: usize },
+    GetHistory { client_id: usize, data_name: String },
 }
 
 #[derive(Debug)]
@@ -52,7 +39,13 @@ pub struct WebServer {
 impl WebServer {
     pub fn new(address: &str) -> (Arc<Self>, Receiver<WebSignal>) {
         let (tx, rx) = channel();
-        let listener = TcpListener::bind(address).unwrap();
+        let listener = match TcpListener::bind(address) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("Failed to bind TCP listener: {}", e);
+                std::process::exit(1);
+            }
+        };
         let connections = Arc::new(Mutex::new(HashMap::new()));
 
         let server = Self {
@@ -67,15 +60,26 @@ impl WebServer {
     pub fn run(self: &Arc<Self>) {
         println!(
             "Web server running on {}",
-            self.listener.local_addr().unwrap()
+            self.listener.local_addr().unwrap_or_else(|e| {
+                eprintln!("Failed to get local address: {}", e);
+                std::process::exit(1);
+            })
         );
 
         let server_clone = Arc::clone(self);
         thread::spawn(move || {
             for stream in server_clone.listener.incoming() {
-                let connections = Arc::clone(&server_clone.connections);
-                let server = Arc::clone(&server_clone);
-                thread::spawn(move || server.handle_request(stream.unwrap(), connections));
+                match stream {
+                    Ok(stream) => {
+                        let connections = Arc::clone(&server_clone.connections);
+                        let server = Arc::clone(&server_clone);
+                        thread::spawn(move || server.handle_request(stream, connections));
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to accept connection: {}", e);
+                        continue;
+                    }
+                }
             }
         });
     }
@@ -180,14 +184,13 @@ impl WebServer {
                                     serde_json::from_str::<serde_json::Value>(&message)
                                 {
                                     match query["data"].as_str() {
-                                        Some("transactions") => {
+                                        Some("history") => {
                                             if let Some(data_name) = query["params"].as_str() {
-                                                let _ = self.signal_tx.send(
-                                                    WebSignal::GetTransactions {
+                                                let _ =
+                                                    self.signal_tx.send(WebSignal::GetHistory {
                                                         client_id: id,
                                                         data_name: data_name.to_string(),
-                                                    },
-                                                );
+                                                    });
                                             }
                                         }
                                         Some("chain") => {
@@ -195,18 +198,15 @@ impl WebServer {
                                                 .signal_tx
                                                 .send(WebSignal::GetChain { client_id: id });
                                         }
-                                        Some("block") => {
-                                            if let Some(block_index) = query["params"].as_u64() {
-                                                let _ = self.signal_tx.send(WebSignal::GetBlock {
-                                                    client_id: id,
-                                                    block_index: block_index as usize,
-                                                });
-                                            }
-                                        }
                                         Some("peers") => {
                                             let _ = self
                                                 .signal_tx
                                                 .send(WebSignal::GetPeers { client_id: id });
+                                        }
+                                        Some("cache") => {
+                                            let _ = self
+                                                .signal_tx
+                                                .send(WebSignal::GetCache { client_id: id });
                                         }
                                         _ => {}
                                     }

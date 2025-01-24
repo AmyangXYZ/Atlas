@@ -125,7 +125,6 @@ impl Node {
                     .iter()
                     .map(|block| {
                         serde_json::json!({
-                            "prev_hash": hex_string(&block.prev_block_hash),
                             "timestamp": block.timestamp,
                             "merkle_root": hex_string(&block.merkle_root),
                             "transaction_count": block.transactions.len()
@@ -143,6 +142,17 @@ impl Node {
                     .as_bytes(),
                 );
             }
+            WebSignal::GetCache { client_id } => {
+                self.web_server.send_to_client(
+                    client_id,
+                    serde_json::json!({
+                        "type": "cache",
+                        "value": self.cache.metadata()
+                    })
+                    .to_string()
+                    .as_bytes(),
+                );
+            }
             WebSignal::GetPeers { client_id } => {
                 self.web_server.send_to_client(
                     client_id,
@@ -154,25 +164,7 @@ impl Node {
                     .as_bytes(),
                 );
             }
-            WebSignal::GetBlock {
-                client_id,
-                block_index,
-            } => {
-                let block = self
-                    .chain
-                    .get(block_index)
-                    .expect("Block index out of bounds");
-                self.web_server.send_to_client(
-                    client_id,
-                    serde_json::json!({
-                        "type": "block",
-                        "value": block
-                    })
-                    .to_string()
-                    .as_bytes(),
-                );
-            }
-            WebSignal::GetTransactions {
+            WebSignal::GetHistory {
                 client_id,
                 data_name,
             } => {
@@ -187,14 +179,13 @@ impl Node {
                 self.web_server.send_to_client(
                     client_id,
                     serde_json::json!({
-                        "type": "transactions",
+                        "type": "history",
                         "value": transactions
                     })
                     .to_string()
                     .as_bytes(),
                 );
             }
-            _ => (),
         }
     }
 
@@ -272,7 +263,6 @@ impl Node {
             serde_json::json!({
                 "type": "block",
                 "value": {
-                    "prev_block_hash": hex_string(&block.prev_block_hash),
                     "timestamp": block.timestamp,
                     "merkle_root": hex_string(&block.merkle_root),
                     "transaction_count": block.transactions.len()
@@ -385,6 +375,14 @@ impl Node {
             data_payload.data.len()
         ));
         self.create_transaction(packet.src, data_payload.name.as_str(), CacheOperation::Set);
+        self.web_server.broadcast_message(
+            serde_json::json!({
+                "type": "cache",
+                "value": self.cache.metadata()
+            })
+            .to_string()
+            .as_bytes(),
+        );
     }
 
     fn handle_get_data(&mut self, packet: &Packet) {
@@ -400,6 +398,15 @@ impl Node {
             );
             self.send(&data_packet);
         }
+
+        self.web_server.broadcast_message(
+            serde_json::json!({
+                "type": "cache",
+                "value": self.cache.metadata()
+            })
+            .to_string()
+            .as_bytes(),
+        );
 
         self.create_transaction(packet.src, data_payload.name.as_str(), CacheOperation::Get);
     }
@@ -429,11 +436,14 @@ impl Node {
         );
         self.send(&chain_packet);
 
-        let json = serde_json::to_string(&self.chain).unwrap_or_else(|e| {
-            self.system_log(format!("Error serializing chain: {}", e));
-            String::from("[]")
-        });
-        self.web_server.broadcast_message(json.as_bytes());
+        self.web_server.broadcast_message(
+            serde_json::json!({
+                "type": "chain",
+                "value": self.chain
+            })
+            .to_string()
+            .as_bytes(),
+        );
     }
 
     fn handle_transaction(&mut self, packet: &Packet) {
@@ -461,12 +471,14 @@ impl Node {
                 transaction_payload.transaction.clone(),
             );
 
-            let json =
-                serde_json::to_string(&transaction_payload.transaction).unwrap_or_else(|e| {
-                    self.system_log(format!("Error serializing chain: {}", e));
-                    String::from("[]")
-                });
-            self.web_server.broadcast_message(json.as_bytes());
+            self.web_server.broadcast_message(
+                serde_json::json!({
+                    "type": "transaction",
+                    "value": transaction_payload.transaction
+                })
+                .to_string()
+                .as_bytes(),
+            );
         } else {
             self.system_log(format!(
                 "Transaction verification failed: client {} {:?} data {:?} at node {} on {}",
@@ -496,11 +508,18 @@ impl Node {
             ));
         }
 
-        let json = serde_json::to_string(&block_payload.block).unwrap_or_else(|e| {
-            self.system_log(format!("Error serializing chain: {}", e));
-            String::from("[]")
-        });
-        self.web_server.broadcast_message(json.as_bytes());
+        self.web_server.broadcast_message(
+            serde_json::json!({
+            "type": "block",
+            "value": {
+                "timestamp": block_payload.block.timestamp,
+                "merkle_root": hex_string(&block_payload.block.merkle_root),
+                "transaction_count": block_payload.block.transactions.len()
+            }
+            })
+            .to_string()
+            .as_bytes(),
+        );
     }
 
     fn send(&mut self, packet: &Packet) {

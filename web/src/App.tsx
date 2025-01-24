@@ -1,5 +1,35 @@
 import { useEffect, useRef, useState } from "react"
+import Stack from "@mui/material/Stack"
 import "./App.css"
+import Paper from "@mui/material/Paper"
+import {
+  Box,
+  Table,
+  TableCell,
+  TableBody,
+  TableContainer,
+  TableRow,
+  TableHead,
+  Grid2 as Grid,
+  Collapse,
+  Typography,
+  TableFooter,
+  TablePagination,
+  IconButton,
+} from "@mui/material"
+import { createTheme, ThemeProvider } from "@mui/material/styles"
+import { CssBaseline } from "@mui/material"
+import { KeyboardArrowDown, KeyboardArrowUp, KeyboardDoubleArrowDown } from "@mui/icons-material"
+
+const darkTheme = createTheme({
+  palette: {
+    mode: "dark",
+    background: {
+      default: "#0f1116",
+      paper: "#0f1116",
+    },
+  },
+})
 
 type Query = {
   data: string
@@ -21,12 +51,21 @@ type Block = {
   transaction_count: number
 }
 
+type Cache = {
+  name: string
+  size: number
+  last_updated: number
+  last_accessed: number
+  access_count: number
+}
+
 function App() {
   const [chain, setChain] = useState<Block[]>([])
-  const [peers, setPeers] = useState<[]>([])
-  const [transactions, setTransactions] = useState<Transaction[]>([])
+  const [cache, setCache] = useState<Cache[]>([])
+  const [showHistory, setShowHistory] = useState<string>("")
+  const [history, setHistory] = useState<Transaction[]>([])
   const wsRef = useRef<WebSocket | null>(null)
-
+  const chainDom = useRef<HTMLDivElement | null>(null)
   const getChain = () => {
     wsRef.current?.send(
       JSON.stringify({
@@ -35,27 +74,10 @@ function App() {
     )
   }
 
-  const getPeers = () => {
+  const getHistory = (dataName: string) => {
     wsRef.current?.send(
       JSON.stringify({
-        data: "peers",
-      } as Query)
-    )
-  }
-
-  const getBlock = (blockIndex: number) => {
-    wsRef.current?.send(
-      JSON.stringify({
-        data: "block",
-        params: blockIndex,
-      } as Query)
-    )
-  }
-
-  const getTransactions = (dataName: string) => {
-    wsRef.current?.send(
-      JSON.stringify({
-        data: "transactions",
+        data: "history",
         params: dataName,
       } as Query)
     )
@@ -82,25 +104,243 @@ function App() {
       if (data.type === "chain") {
         setChain(data.value)
       }
-      if (data.type === "peers") {
-        setPeers(data.value)
-      }
       if (data.type === "block") {
         setChain((prevChain) => [...prevChain, data.value])
       }
-      if (data.type === "transactions") {
-        setTransactions((prevTransactions) => [...prevTransactions, data.value])
+      if (data.type === "history") {
+        setHistory(data.value)
+      }
+      if (data.type === "cache") {
+        setCache(data.value)
       }
     }
   }, [])
 
+  useEffect(() => {
+    if (chainDom.current) {
+      chainDom.current.scrollTo({
+        top: chainDom.current.scrollHeight,
+      })
+    }
+  }, [chain])
+
+  return (
+    <ThemeProvider theme={darkTheme}>
+      <CssBaseline />
+      <Grid container spacing={4} sx={{ width: "1080px" }}>
+        <Grid size={4}>
+          <Box
+            ref={chainDom}
+            sx={{
+              width: "100%",
+              height: "80vh",
+              display: "flex",
+              overflowY: "scroll",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Stack
+              spacing={1}
+              divider={
+                <Box sx={{ display: "flex", alignItems: "center" }}>
+                  <KeyboardDoubleArrowDown sx={{ margin: "auto", color: "#ccc" }} />
+                </Box>
+              }
+            >
+              {chain.map((block, i) => (
+                <Box
+                  key={i}
+                  sx={{
+                    width: "240px",
+                    backgroundColor: "#1A2027",
+                    padding: (theme) => theme.spacing(1),
+                    textAlign: "center",
+                    color: (theme) => theme.palette.text.secondary,
+                    typography: "body2",
+                  }}
+                >
+                  <Stack spacing={1}>
+                    <div>Block #{i}</div>
+                    <div>Hash: {block.merkle_root.slice(0, 15)}...</div>
+                    <div>Time: {formatDateTime(block.timestamp)}</div>
+                    <div>Transactions: {block.transaction_count}</div>
+                  </Stack>
+                </Box>
+              ))}
+            </Stack>
+          </Box>
+        </Grid>
+        <Grid size={8}>
+          <Box sx={{ width: "100%", display: "flex", padding: 2, alignItems: "center" }}>
+            <TableContainer component={Paper}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow
+                    sx={{
+                      "& .MuiTableCell-root": {
+                        color: (theme) => theme.palette.text.secondary,
+                        textAlign: "center",
+                      },
+                    }}
+                  >
+                    <TableCell>Name</TableCell>
+                    <TableCell>Size</TableCell>
+                    <TableCell>Last Updated</TableCell>
+                    <TableCell>Last Accessed</TableCell>
+                    <TableCell>Access Count</TableCell>
+                    <TableCell>History</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {cache.map((data, i) => (
+                    <CacheRow
+                      data={data}
+                      history={history}
+                      getHistory={getHistory}
+                      showHistory={showHistory}
+                      setShowHistory={setShowHistory}
+                      key={i}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Box>
+        </Grid>
+      </Grid>
+    </ThemeProvider>
+  )
+}
+
+function CacheRow({
+  data,
+  getHistory,
+  history,
+  showHistory,
+  setShowHistory,
+}: {
+  data: Cache
+  history: Transaction[]
+  getHistory: (dataName: string) => void
+  showHistory: string
+  setShowHistory: (showHistory: string) => void
+}) {
+  const [page, setPage] = useState(0)
+  const rowsPerPage = 10
+  const handleChangePage = (_event: unknown, newPage: number) => {
+    setPage(newPage)
+  }
+
   return (
     <>
-      <div>Chain: {JSON.stringify(chain)}</div>
-      <div>Peers: {JSON.stringify(peers)}</div>
-      <div>Transactions: {JSON.stringify(transactions)}</div>
+      <TableRow
+        sx={{
+          "& > *": { borderBottom: "unset" },
+          "& .MuiTableCell-root": {
+            color: (theme) => theme.palette.text.secondary,
+            textAlign: "center",
+          },
+        }}
+      >
+        <TableCell align="center">{data.name}</TableCell>
+        <TableCell align="center">{data.size}</TableCell>
+        <TableCell align="center">{formatDateTime(data.last_updated)}</TableCell>
+        <TableCell align="center">{formatDateTime(data.last_accessed)}</TableCell>
+        <TableCell align="center">{data.access_count}</TableCell>
+        <TableCell>
+          <IconButton
+            aria-label="expand row"
+            size="small"
+            onClick={() => {
+              setShowHistory(showHistory === data.name ? "" : data.name)
+              if (showHistory !== data.name) {
+                getHistory(data.name)
+              }
+            }}
+          >
+            {showHistory === data.name ? <KeyboardArrowUp /> : <KeyboardArrowDown />}
+          </IconButton>
+        </TableCell>
+      </TableRow>
+      <TableRow
+        sx={{
+          "& .MuiTableCell-root": {
+            color: (theme) => theme.palette.text.secondary,
+          },
+        }}
+      >
+        <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={6}>
+          <Collapse in={showHistory === data.name} timeout="auto" unmountOnExit>
+            <Box sx={{ margin: 1 }}>
+              <Typography variant="h6" gutterBottom component="div">
+                History
+              </Typography>
+            </Box>
+            <Table size="small">
+              <TableHead>
+                <TableRow
+                  sx={{
+                    "& .MuiTableCell-root": {
+                      color: (theme) => theme.palette.text.secondary,
+                      textAlign: "center",
+                    },
+                  }}
+                >
+                  <TableCell>Client ID</TableCell>
+                  <TableCell>Data Name</TableCell>
+                  <TableCell>Operation</TableCell>
+                  <TableCell>Timestamp</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {history.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map((transaction, i) => (
+                  <TableRow
+                    key={i}
+                    sx={{
+                      "& .MuiTableCell-root": { color: (theme) => theme.palette.text.secondary, textAlign: "center" },
+                    }}
+                  >
+                    <TableCell>{transaction.client_id}</TableCell>
+                    <TableCell>{transaction.data_name}</TableCell>
+                    <TableCell>{transaction.operation}</TableCell>
+                    <TableCell>{formatDateTime(transaction.timestamp)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+              <TableFooter>
+                <TableRow>
+                  <TablePagination
+                    colSpan={5}
+                    count={history.length}
+                    rowsPerPage={rowsPerPage}
+                    page={page}
+                    onPageChange={handleChangePage}
+                    rowsPerPageOptions={[]}
+                  />
+                </TableRow>
+              </TableFooter>
+            </Table>
+          </Collapse>
+        </TableCell>
+      </TableRow>
     </>
   )
 }
 
 export default App
+
+const formatDateTime = (timestamp: number): string => {
+  if (timestamp === 0) return "N/A"
+  return new Date(timestamp * 1000)
+    .toLocaleString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+      month: "numeric",
+      day: "numeric",
+      year: "numeric",
+    })
+    .replace(",", "")
+}
