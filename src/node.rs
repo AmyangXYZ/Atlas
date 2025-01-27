@@ -15,8 +15,9 @@ use std::net::UdpSocket;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-const ATLAS_PORT: u16 = 47145;
-const WEB_PORT: u16 = 47100;
+
+pub const ATLAS_PORT: u16 = 7017;
+pub const WEB_PORT: u16 = 7010;
 
 pub struct Node {
     id: u16,

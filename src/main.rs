@@ -1,6 +1,9 @@
 use std::{thread, time::Duration};
 
-use atlas::{client::Client, node::Node};
+use atlas::{
+    client::Client,
+    node::{Node, ATLAS_PORT},
+};
 
 fn main() {
     let orchestrator = thread::spawn(move || {
@@ -15,7 +18,11 @@ fn main() {
     });
 
     let client = thread::spawn(move || {
-        let mut client = Client::new(2, Duration::from_secs(1), "127.0.0.1:47145");
+        let mut client = Client::new(
+            2,
+            Duration::from_secs(1),
+            format!("127.0.0.1:{}", ATLAS_PORT).as_str(),
+        );
         let mut sat = 0;
 
         loop {

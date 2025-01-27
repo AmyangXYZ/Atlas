@@ -94,7 +94,7 @@ function App() {
   }
 
   useEffect(() => {
-    const ws = new WebSocket("ws://localhost:47100")
+    const ws = new WebSocket("ws://localhost:7010")
     wsRef.current = ws
     ws.onopen = () => {
       console.log("Connected to server")
@@ -150,7 +150,7 @@ function App() {
                 }}
               >
                 <Typography variant="h6" component="div">
-                  IFT-ATLAS: Advanced Twin Linkage And Synchronization
+                  ATLAS: Advanced Twin Linkage And Synchronization
                 </Typography>
 
                 <Typography variant="body1" component="div">
