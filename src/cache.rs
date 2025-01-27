@@ -14,7 +14,7 @@ pub struct CachedDataMeta {
     size: usize,
     last_updated: u64,
     last_accessed: u64,
-    access_count: usize,
+    transactions: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -51,7 +51,7 @@ impl InMemoryCache {
 impl Cache for InMemoryCache {
     fn get(&mut self, key: &str) -> Option<Vec<u8>> {
         if let Some((value, meta)) = self.map.get_mut(key) {
-            meta.access_count += 1;
+            meta.transactions += 1;
             meta.last_accessed = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -71,6 +71,7 @@ impl Cache for InMemoryCache {
         if let Some((existing_value, meta)) = self.map.get_mut(key) {
             // Update existing entry
             *existing_value = value.to_vec();
+            meta.transactions += 1;
             meta.size = value.len();
             meta.last_updated = now;
         } else {
@@ -84,7 +85,7 @@ impl Cache for InMemoryCache {
                         size: value.len(),
                         last_updated: now,
                         last_accessed: 0,
-                        access_count: 0,
+                        transactions: 1,
                     },
                 ),
             );

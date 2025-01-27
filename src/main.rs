@@ -16,15 +16,14 @@ fn main() {
 
     let client = thread::spawn(move || {
         let mut client = Client::new(2, Duration::from_secs(1), "127.0.0.1:47145");
+        let mut sat = 0;
+
         loop {
-            thread::sleep(Duration::from_secs(3));
-            client.set_data("hello", "world".as_bytes());
-            thread::sleep(Duration::from_secs(2));
-            client.get_data("hello");
-            thread::sleep(Duration::from_secs(3));
-            client.set_data("hello2", "world2".as_bytes());
-            thread::sleep(Duration::from_secs(2));
-            client.get_data("hello2");
+            thread::sleep(Duration::from_secs(1));
+            client.set_data(&format!("/satellite/{}", sat % 10), "world".as_bytes());
+            thread::sleep(Duration::from_secs(1));
+            client.get_data(&format!("/satellite/{}", sat % 10));
+            sat += 1;
         }
     });
 

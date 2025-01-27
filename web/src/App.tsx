@@ -16,10 +16,12 @@ import {
   TableFooter,
   TablePagination,
   IconButton,
+  AppBar,
+  Toolbar,
 } from "@mui/material"
 import { createTheme, ThemeProvider } from "@mui/material/styles"
 import { CssBaseline } from "@mui/material"
-import { KeyboardArrowDown, KeyboardArrowUp, KeyboardDoubleArrowDown } from "@mui/icons-material"
+import { KeyboardArrowDown, KeyboardArrowUp, KeyboardDoubleArrowDown, Storage } from "@mui/icons-material"
 
 const darkTheme = createTheme({
   palette: {
@@ -56,7 +58,7 @@ type Cache = {
   size: number
   last_updated: number
   last_accessed: number
-  access_count: number
+  transactions: number
 }
 
 function App() {
@@ -108,7 +110,8 @@ function App() {
         setChain((prevChain) => [...prevChain, data.value])
       }
       if (data.type === "history") {
-        setHistory(data.value)
+        const transactions = data.value.sort((a: Transaction, b: Transaction) => a.timestamp - b.timestamp)
+        setHistory(transactions)
       }
       if (data.type === "cache") {
         setCache(data.value)
@@ -124,10 +127,39 @@ function App() {
     }
   }, [chain])
 
+  const [page, setPage] = useState(0)
+  const rowsPerPage = 10
+  const handleChangePage = (_event: unknown, newPage: number) => {
+    setPage(newPage)
+  }
+
   return (
     <ThemeProvider theme={darkTheme}>
       <CssBaseline />
-      <Grid container spacing={4} sx={{ width: "1080px" }}>
+      <Grid container spacing={4} sx={{ width: "1280px" }}>
+        <Grid size={12}>
+          <Box>
+            <AppBar position="static" sx={{ borderRadius: "4px" }}>
+              <Toolbar
+                variant="dense"
+                sx={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  backgroundColor: "#1A2027",
+                  borderRadius: "4px",
+                }}
+              >
+                <Typography variant="h6" component="div">
+                  IFT-ATLAS: Advanced Twin Linkage And Synchronization
+                </Typography>
+
+                <Typography variant="body1" component="div">
+                  Nodes: 2 - Blocks: {chain.length} - Cached data: {cache.length}
+                </Typography>
+              </Toolbar>
+            </AppBar>
+          </Box>
+        </Grid>
         <Grid size={4}>
           <Box
             ref={chainDom}
@@ -158,10 +190,23 @@ function App() {
                     textAlign: "center",
                     color: (theme) => theme.palette.text.secondary,
                     typography: "body2",
+                    borderRadius: "4px",
                   }}
                 >
                   <Stack spacing={1}>
-                    <div>Block #{i}</div>
+                    <div
+                      style={{
+                        fontSize: "1.1rem",
+                        fontWeight: "bold",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "4px",
+                      }}
+                    >
+                      <Storage />
+                      Block #{i}
+                    </div>
                     <div>Hash: {block.merkle_root.slice(0, 15)}...</div>
                     <div>Time: {formatDateTime(block.timestamp)}</div>
                     <div>Transactions: {block.transaction_count}</div>
@@ -172,9 +217,9 @@ function App() {
           </Box>
         </Grid>
         <Grid size={8}>
-          <Box sx={{ width: "100%", display: "flex", padding: 2, alignItems: "center" }}>
+          <Box sx={{ width: "100%", display: "flex", padding: 0, alignItems: "center" }}>
             <TableContainer component={Paper}>
-              <Table size="small">
+              <Table size="small" sx={{ backgroundColor: "#1A2027" }}>
                 <TableHead>
                   <TableRow
                     sx={{
@@ -188,12 +233,11 @@ function App() {
                     <TableCell>Size</TableCell>
                     <TableCell>Last Updated</TableCell>
                     <TableCell>Last Accessed</TableCell>
-                    <TableCell>Access Count</TableCell>
-                    <TableCell>History</TableCell>
+                    <TableCell>Transactions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {cache.map((data, i) => (
+                  {cache.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map((data, i) => (
                     <CacheRow
                       data={data}
                       history={history}
@@ -204,6 +248,18 @@ function App() {
                     />
                   ))}
                 </TableBody>
+                <TableFooter>
+                  <TableRow>
+                    <TablePagination
+                      colSpan={5}
+                      count={cache.length}
+                      rowsPerPage={rowsPerPage}
+                      page={page}
+                      onPageChange={handleChangePage}
+                      rowsPerPageOptions={[]}
+                    />
+                  </TableRow>
+                </TableFooter>
               </Table>
             </TableContainer>
           </Box>
@@ -227,7 +283,7 @@ function CacheRow({
   setShowHistory: (showHistory: string) => void
 }) {
   const [page, setPage] = useState(0)
-  const rowsPerPage = 10
+  const rowsPerPage = 5
   const handleChangePage = (_event: unknown, newPage: number) => {
     setPage(newPage)
   }
@@ -247,8 +303,8 @@ function CacheRow({
         <TableCell align="center">{data.size}</TableCell>
         <TableCell align="center">{formatDateTime(data.last_updated)}</TableCell>
         <TableCell align="center">{formatDateTime(data.last_accessed)}</TableCell>
-        <TableCell align="center">{data.access_count}</TableCell>
         <TableCell>
+          {data.transactions}
           <IconButton
             aria-label="expand row"
             size="small"
@@ -273,8 +329,8 @@ function CacheRow({
         <TableCell style={{ paddingBottom: 0, paddingTop: 0 }} colSpan={6}>
           <Collapse in={showHistory === data.name} timeout="auto" unmountOnExit>
             <Box sx={{ margin: 1 }}>
-              <Typography variant="h6" gutterBottom component="div">
-                History
+              <Typography variant="h6" gutterBottom component="div" sx={{ fontSize: "1.1rem" }}>
+                Transactions
               </Typography>
             </Box>
             <Table size="small">

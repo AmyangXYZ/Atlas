@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::transaction::Transaction;
 use crate::utils::serialize_hash;
 
-pub const BLOCK_PERIOD: u64 = 10; // seconds
+pub const BLOCK_PERIOD: u64 = 30; // seconds
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
